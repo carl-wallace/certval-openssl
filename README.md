@@ -139,8 +139,11 @@ for the configuration, which doubles as a worked example.
 Run on macOS 26.6 against Homebrew's OpenSSL 3.6.5 (default provider) and rust-pki's PKITS
 collections: OpenSSL answered all 389 RSA and 388 ECDSA verifications that software accepted, and all
 394 for each of ML-DSA-44, -65 and -87 and for each of the twelve SLH-DSA parameter sets, with no
-disagreements in either interface. **Not yet run against a FIPS
-provider**; the CI job that does so has not run yet. Not yet published to crates.io.
+disagreements in either interface.
+
+In CI, against OpenSSL's FIPS provider (built from the 3.0.9 source release and loaded into Ubuntu
+24.04's OpenSSL 3.0.13 with `fips=yes` required), the FIPS provider answered all 389 RSA and 388
+ECDSA verifications and both RSASSA-PSS ones, with no disagreements.
 
 certval is consumed from crates.io. A commented `[patch.crates-io]` line in `Cargo.toml` redirects
 the dependency to a local checkout for developing both crates together.
