@@ -1,0 +1,243 @@
+name: certval-openssl
+
+on:
+  pull_request:
+  push:
+    branches: main
+  # Manual re-runs via `gh workflow run ci.yml` (available once this file is
+  # on the default branch).
+  workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: certval-openssl
+
+env:
+  CARGO_INCREMENTAL: 0
+  RUSTFLAGS: "-Dwarnings"
+
+# Cancels CI jobs when new commits are pushed to a PR branch
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        rust:
+          - 1.88.0 # MSRV, matching certval
+          - stable
+    steps:
+      # certval comes from crates.io, so no sibling checkout is needed here.
+      - uses: actions/checkout@v7
+        with:
+          path: certval-openssl
+      - run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust }}
+      - run: cargo build --all-targets
+      - run: cargo build --all-targets --all-features
+
+  # Lints run on stable only, deliberately not across the build matrix: clippy's diagnostics differ
+  # between toolchains, so linting against the MSRV pin reports on a compiler nobody develops with.
+  # The pre-commit hook runs the same commands locally so they fail before a push rather than in
+  # CI. It is an early warning, not a replacement for these jobs.
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: certval-openssl
+      - run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          # Not installed by default.
+          components: clippy
+      - run: cargo clippy --all-targets
+      - run: cargo clippy --all-targets --all-features
+
+  # A job of its own so it can be a required check without making clippy one: each Rust release
+  # adds lints, and a required clippy would fail unrelated pull requests.
+  rustfmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: certval-openssl
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          # Not installed by default.
+          components: rustfmt
+      - run: cargo fmt --check
+
+  # Against the runner's OpenSSL with its default provider.
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: certval-openssl
+      # The certificate collections live in rust-pki's test data and are pointed at rather than
+      # copied, which is what the environment variables below are for. Pinned to the commit the
+      # certval release in Cargo.toml was published from (certval-v0.2.0-rc.1), so the certificates
+      # and the library under test stay in lockstep; bump both together.
+      - uses: actions/checkout@v7
+        with:
+          repository: carl-wallace/rust-pki
+          ref: 93104f49a8083f1e527e3b4e830581b917674e2f
+          path: rust-pki
+      - run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Run the unit, signature and collection tests
+        env:
+          CERTVAL_OPENSSL_RSA_CERTS: ${{ github.workspace }}/rust-pki/certval/tests/examples/PKITS_data_2048/certs
+          CERTVAL_OPENSSL_ECDSA_CERTS: ${{ github.workspace }}/rust-pki/certval/tests/examples/PKITS_data_p256/certs
+          CERTVAL_OPENSSL_PSS_CERTS: ${{ github.workspace }}/rust-pki/certval/tests/examples/rsapss
+          CERTVAL_OPENSSL_MLDSA_CERTS: ${{ github.workspace }}/rust-pki/certval/tests/examples/pkits_ml_dsa_44/certs
+        # --nocapture so the per-family tallies land in the log: they are the only way to see how
+        # much OpenSSL answered, as opposed to software.
+        run: cargo test --features pqc -- --nocapture
+
+  # ML-DSA and SLH-DSA arrived in OpenSSL 3.5, and Ubuntu 24.04's OpenSSL is 3.0, so the jobs above
+  # check only that the provider declines them there. This one builds an OpenSSL 3.5 release and
+  # links against it, so the post-quantum paths are exercised. The build is cached by version.
+  test-openssl-3-5:
+    runs-on: ubuntu-24.04
+    env:
+      OPENSSL_VERSION: 3.5.5
+      OPENSSL_SHA256: b28c91532a8b65a1f983b4c28b7488174e4a01008e29ce8e69bd789f28bc2a89
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: certval-openssl
+      - uses: actions/checkout@v7
+        with:
+          repository: carl-wallace/rust-pki
+          ref: 93104f49a8083f1e527e3b4e830581b917674e2f
+          path: rust-pki
+      - run: sudo apt-get update && sudo apt-get install -y pkg-config
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache the OpenSSL build
+        id: openssl-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/openssl
+          key: openssl-${{ env.OPENSSL_VERSION }}-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Build OpenSSL
+        if: steps.openssl-cache.outputs.cache-hit != 'true'
+        working-directory: ${{ runner.temp }}
+        run: |
+          curl -fsSL -o openssl.tar.gz \
+            "https://github.com/openssl/openssl/releases/download/openssl-${OPENSSL_VERSION}/openssl-${OPENSSL_VERSION}.tar.gz"
+          echo "${OPENSSL_SHA256}  openssl.tar.gz" | sha256sum -c -
+          tar xzf openssl.tar.gz
+          cd "openssl-${OPENSSL_VERSION}"
+          ./Configure --prefix="$HOME/openssl" --libdir=lib
+          make -j"$(nproc)"
+          make install_sw
+
+      - name: Run the tests against OpenSSL 3.5
+        env:
+          OPENSSL_DIR: /home/runner/openssl
+          LD_LIBRARY_PATH: /home/runner/openssl/lib
+          CERTVAL_OPENSSL_RSA_CERTS: ${{ github.workspace }}/rust-pki/certval/tests/examples/PKITS_data_2048/certs
+          CERTVAL_OPENSSL_ECDSA_CERTS: ${{ github.workspace }}/rust-pki/certval/tests/examples/PKITS_data_p256/certs
+          CERTVAL_OPENSSL_PSS_CERTS: ${{ github.workspace }}/rust-pki/certval/tests/examples/rsapss
+          CERTVAL_OPENSSL_MLDSA_CERTS: ${{ github.workspace }}/rust-pki/certval/tests/examples/pkits_ml_dsa_65/certs
+          # Two of the twelve parameter sets, one per hash family: every set passes locally, but
+          # the software verifier the results are compared against costs about half a minute per
+          # set in a debug build.
+          CERTVAL_OPENSSL_SLHDSA_CERTS: ${{ github.workspace }}/rust-pki/certval/tests/examples/pkits_slh_dsa_sha2_128f/certs:${{ github.workspace }}/rust-pki/certval/tests/examples/pkits_slh_dsa_shake_256f/certs
+        run: cargo test --features pqc -- --nocapture
+
+  # The same tests with every algorithm fetched from OpenSSL's FIPS provider. Ubuntu does not ship
+  # the FIPS provider outside Ubuntu Pro, so it is built here from a release OpenSSL lists as a
+  # validated FIPS provider version (confirm against the CMVP list before relying on that), and
+  # loaded into the runner's OpenSSL 3.0 library. The build is cached by version.
+  test-fips:
+    runs-on: ubuntu-24.04
+    env:
+      FIPS_VERSION: 3.0.9
+      FIPS_SHA256: eb1ab04781474360f77c318ab89d8c5a03abc38e63d65a603cabbf1b00a1dc90
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: certval-openssl
+      - uses: actions/checkout@v7
+        with:
+          repository: carl-wallace/rust-pki
+          ref: 93104f49a8083f1e527e3b4e830581b917674e2f
+          path: rust-pki
+      - run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache the FIPS provider build
+        id: fips-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/fips
+          key: openssl-fips-${{ env.FIPS_VERSION }}-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Build the FIPS provider
+        if: steps.fips-cache.outputs.cache-hit != 'true'
+        working-directory: ${{ runner.temp }}
+        run: |
+          curl -fsSL -o openssl.tar.gz \
+            "https://github.com/openssl/openssl/releases/download/openssl-${FIPS_VERSION}/openssl-${FIPS_VERSION}.tar.gz"
+          echo "${FIPS_SHA256}  openssl.tar.gz" | sha256sum -c -
+          tar xzf openssl.tar.gz
+          cd "openssl-${FIPS_VERSION}"
+          ./Configure enable-fips --prefix="$HOME/fips" --libdir=lib
+          make -j"$(nproc)"
+          # Installs fips.so and runs fipsinstall, which self-tests the module and writes
+          # fipsmodule.cnf.
+          make install_fips
+
+      - name: Configure OpenSSL to require the FIPS provider
+        run: |
+          cat > "$HOME/fips/openssl.cnf" <<EOF
+          config_diagnostics = 1
+          openssl_conf = openssl_init
+
+          .include $HOME/fips/ssl/fipsmodule.cnf
+
+          [openssl_init]
+          providers = provider_sect
+          alg_section = algorithm_sect
+
+          [provider_sect]
+          fips = fips_sect
+          base = base_sect
+
+          [base_sect]
+          activate = 1
+
+          [algorithm_sect]
+          default_properties = fips=yes
+          EOF
+          # Show the providers the configuration activates, so a run that never reached the FIPS
+          # provider is visible in the log as well as failing the FIPS test.
+          OPENSSL_CONF="$HOME/fips/openssl.cnf" OPENSSL_MODULES="$HOME/fips/lib/ossl-modules" \
+            openssl list -providers
+
+      # Built before OPENSSL_CONF is set, so cargo's own downloads use the system's default
+      # configuration and only the tests run against the FIPS one.
+      - run: cargo test --features pqc --no-run
+
+      - name: Run the tests against the FIPS provider
+        env:
+          CERTVAL_OPENSSL_EXPECT_FIPS: "1"
+          CERTVAL_OPENSSL_RSA_CERTS: ${{ github.workspace }}/rust-pki/certval/tests/examples/PKITS_data_2048/certs
+          CERTVAL_OPENSSL_ECDSA_CERTS: ${{ github.workspace }}/rust-pki/certval/tests/examples/PKITS_data_p256/certs
+          CERTVAL_OPENSSL_PSS_CERTS: ${{ github.workspace }}/rust-pki/certval/tests/examples/rsapss
+          CERTVAL_OPENSSL_MLDSA_CERTS: ${{ github.workspace }}/rust-pki/certval/tests/examples/pkits_ml_dsa_44/certs
+        run: |
+          export OPENSSL_CONF="$HOME/fips/openssl.cnf"
+          export OPENSSL_MODULES="$HOME/fips/lib/ossl-modules"
+          cargo test --offline --features pqc -- --nocapture
