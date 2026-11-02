@@ -7,7 +7,7 @@ use certval::{
 };
 use der::asn1::BitString;
 use der::Encode;
-use log::debug;
+use log::{debug, trace};
 use openssl::error::ErrorStack;
 use openssl::md::{Md, MdRef};
 use openssl::pkey::{Id, PKey, Public};
@@ -119,14 +119,14 @@ fn outcome(result: Result<bool, ErrorStack>) -> certval::Result<()> {
     match result {
         // OpenSSL verified the signature.
         Ok(true) => {
-            debug!("OpenSSL verified a signature");
+            trace!("OpenSSL verified a signature");
             Ok(())
         }
 
         // OpenSSL reached a verdict and it was negative. The environment treats this as final and
         // consults no other implementation.
         Ok(false) => {
-            debug!("OpenSSL rejected a signature");
+            trace!("OpenSSL rejected a signature");
             Err(certval::Error::PathValidation(
                 PathValidationStatus::SignatureVerificationFailure,
             ))

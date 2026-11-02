@@ -73,6 +73,8 @@ fn run_collection(family: &str, dir: &str) -> usize {
         digest.disagreements, digest.pairs
     );
 
+    assert_compared(family, &message, &digest);
+
     message.module_answered + digest.module_answered
 }
 
@@ -96,6 +98,10 @@ fn pss_platform_agrees_with_software() {
 /// either way.
 #[test]
 fn ml_dsa_is_answered_where_openssl_has_it() {
+    if !cfg!(feature = "pqc") {
+        println!("ML-DSA: skipped, built without pqc, so certval's software has no verdict to compare against");
+        return;
+    }
     let answered = run_family("ML-DSA", MLDSA_CERTS);
     if env(MLDSA_CERTS).is_none() {
         return;
@@ -116,6 +122,10 @@ fn ml_dsa_is_answered_where_openssl_has_it() {
 /// As for ML-DSA, once per configured SLH-DSA collection.
 #[test]
 fn slh_dsa_is_answered_where_openssl_has_it() {
+    if !cfg!(feature = "pqc") {
+        println!("SLH-DSA: skipped, built without pqc, so certval's software has no verdict to compare against");
+        return;
+    }
     let Some(dirs) = env(SLHDSA_CERTS) else {
         println!("SLH-DSA: skipped, {SLHDSA_CERTS} is not set");
         return;
