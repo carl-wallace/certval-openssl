@@ -118,13 +118,19 @@ fn apply_padding(target: &mut impl RsaSettings, padding: Padding) -> Result<(), 
 fn outcome(result: Result<bool, ErrorStack>) -> certval::Result<()> {
     match result {
         // OpenSSL verified the signature.
-        Ok(true) => Ok(()),
+        Ok(true) => {
+            debug!("OpenSSL verified a signature");
+            Ok(())
+        }
 
         // OpenSSL reached a verdict and it was negative. The environment treats this as final and
         // consults no other implementation.
-        Ok(false) => Err(certval::Error::PathValidation(
-            PathValidationStatus::SignatureVerificationFailure,
-        )),
+        Ok(false) => {
+            debug!("OpenSSL rejected a signature");
+            Err(certval::Error::PathValidation(
+                PathValidationStatus::SignatureVerificationFailure,
+            ))
+        }
 
         // An error is OpenSSL declining the request (an algorithm the configured providers do not
         // offer, or parameters they refuse) rather than judging the signature, so another
