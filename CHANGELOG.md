@@ -9,4 +9,4 @@ RSASSA-PSS and ECDSA certificate signatures through the system's OpenSSL 3, and 
 SLH-DSA through OpenSSL 3.5 and later, through all three of certval's hashing and verification
 interfaces. Uses OpenSSL's default library context, so a system configured for FIPS routes every
 operation through the FIPS provider; `OpenSslCrypto::fips_mode_enabled` reports whether it is.
-MSRV 1.88.
+MSRV 1.89.
