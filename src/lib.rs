@@ -48,12 +48,26 @@
 //! distribution's FIPS mode does) routes every hash and verification here through the FIPS
 //! provider. [`OpenSslCrypto::fips_mode_enabled`] reports whether that is the case.
 
+//!
+//! # CMS
+//!
+//! With the `cms` feature, [`OpenSslCrypto`] also implements certval-cms's `EncryptContent`,
+//! `EncryptKeyTransport`, `EncryptKeyAgreement` and `EncryptKem`, so EnvelopedData and
+//! AuthEnvelopedData can be built with OpenSSL: AES-CBC and AES-GCM content encryption, RSA key
+//! transport, ECDH with the X9.63 KDF, and ML-KEM (OpenSSL 3.5 or later) with HKDF, the last two
+//! with AES key wrap. They are registered on a `CmsEnvironment` the same way, and an OpenSSL error
+//! is likewise a decline.
+
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
 
 mod algorithm;
+#[cfg(feature = "cms")]
+mod cms;
 #[allow(unsafe_code)]
 mod ffi;
 mod provider;
 
+#[cfg(feature = "cms")]
+pub use cms::{OpenSslRecipientKey, OpenSslSigningKey};
 pub use provider::OpenSslCrypto;

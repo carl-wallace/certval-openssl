@@ -69,14 +69,27 @@ fn public_key(spki: &SubjectPublicKeyInfoOwned, padding: Padding) -> Option<PKey
     acceptable.then_some(key)
 }
 
-/// The padding settings both verification paths apply, expressed once.
-trait RsaSettings {
+/// The padding settings the verification paths and signing apply, expressed once.
+pub(crate) trait RsaSettings {
     fn padding(&mut self, padding: RsaPadding) -> Result<(), ErrorStack>;
     fn pss_salt_len(&mut self, len: RsaPssSaltlen) -> Result<(), ErrorStack>;
     fn mgf1(&mut self, hash: Hash) -> Result<(), ErrorStack>;
 }
 
 impl RsaSettings for Verifier<'_> {
+    fn padding(&mut self, padding: RsaPadding) -> Result<(), ErrorStack> {
+        self.set_rsa_padding(padding)
+    }
+    fn pss_salt_len(&mut self, len: RsaPssSaltlen) -> Result<(), ErrorStack> {
+        self.set_rsa_pss_saltlen(len)
+    }
+    fn mgf1(&mut self, hash: Hash) -> Result<(), ErrorStack> {
+        self.set_rsa_mgf1_md(hash.digest())
+    }
+}
+
+#[cfg(feature = "cms")]
+impl RsaSettings for openssl::sign::Signer<'_> {
     fn padding(&mut self, padding: RsaPadding) -> Result<(), ErrorStack> {
         self.set_rsa_padding(padding)
     }
@@ -101,7 +114,10 @@ impl RsaSettings for PkeyCtx<Public> {
 }
 
 /// Applies the padding a scheme calls for. ECDSA needs none.
-fn apply_padding(target: &mut impl RsaSettings, padding: Padding) -> Result<(), ErrorStack> {
+pub(crate) fn apply_padding(
+    target: &mut impl RsaSettings,
+    padding: Padding,
+) -> Result<(), ErrorStack> {
     match padding {
         Padding::Pkcs1 => target.padding(RsaPadding::PKCS1),
         Padding::Pss { mgf_hash, salt_len } => {

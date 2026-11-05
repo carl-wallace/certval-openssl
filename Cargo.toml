@@ -20,7 +20,10 @@ default = []
 # Enables certval's software ML-DSA implementation. The provider needs nothing from it, since it
 # declines ML-DSA, but without it the ML-DSA collection test has no software verdict to compare
 # against and every pair is "no opinion".
-pqc = ["certval/pqc"]
+pqc = ["certval/pqc", "certval-cms?/pqc"]
+# Implements certval-cms's content encryption, key transport, key agreement and KEM interfaces, so
+# that EnvelopedData and AuthEnvelopedData can be built with OpenSSL.
+cms = ["dep:certval-cms", "dep:x509-cert", "dep:zeroize"]
 
 [dependencies]
 certval = { version = "0.2.0-rc.1", default-features = false }
@@ -35,6 +38,10 @@ log = "0.4.33"
 # source into this binary and is never the validated module a deployment is installed with.
 openssl = "0.10.81"
 openssl-sys = "0.9.117"
+# Under the `cms` feature.
+certval-cms = { version = "0.1.0-rc.1", optional = true }
+x509-cert = { version = "0.3.0", default-features = false, optional = true }
+zeroize = { version = "1.8.1", optional = true }
 # The pointer accessor for the one verification call made directly; the version openssl uses.
 foreign-types = "0.3.2"
 
@@ -48,13 +55,21 @@ p384 = { version = "0.14.0", features = ["ecdsa"] }
 p521 = { version = "0.14.0", features = ["ecdsa"] }
 sha2 = "0.11.0"
 signature = "3.0.0"
+# The cms tests: recipient identifiers and attributes, and the random number generator certval-cms's
+# builders take.
+cms = "0.3.0-rc.0"
+getrandom = { version = "0.4.1", features = ["sys_rng"] }
+rand_core = "0.10.1"
 
 [package.metadata.docs.rs]
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
+[patch.crates-io]
+# certval-cms is not on crates.io yet, so the `cms` feature takes it from the neighboring checkout.
+# Remove this once it publishes.
+certval-cms = { path = "../certval-cms" }
 # Uncomment while developing certval and this crate together: it redirects the crates.io dependency
 # above to the local checkout, so edits take effect without a publish. Leave it commented on anything
 # that is committed, or the build depends on a path that only exists here.
-# [patch.crates-io]
 # certval = { path = "../rust-pki/certval" }
