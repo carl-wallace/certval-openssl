@@ -92,6 +92,40 @@ documents a return of 0 as "the signature did not verify", but `PkeyCtx::verify`
 error whenever OpenSSL left anything on its error queue, which it does for an invalid ECDSA signature.
 Through the wrapper, a bad signature would look like a refusal and fall through to software.
 
+## CMS
+
+With the `cms` feature, `OpenSslCrypto` also implements
+[certval-cms](https://github.com/carl-wallace/certval-cms)'s content encryption and decryption and
+its three kinds of recipient encryption, and two credentials hold an OpenSSL private key:
+`OpenSslRecipientKey` decrypts and `OpenSslSigningKey` signs. Register the implementations on a
+`CmsEnvironment` ahead of, or instead of, certval-cms's software:
+
+```rust
+use certval_cms::CmsEnvironment;
+use certval_openssl::OpenSslCrypto;
+
+let mut env = CmsEnvironment::new();
+env.add_encrypt_content_callback(OpenSslCrypto::new());
+env.add_decrypt_content_callback(OpenSslCrypto::new());
+env.add_encrypt_key_transport_callback(OpenSslCrypto::new());
+env.add_encrypt_key_agreement_callback(OpenSslCrypto::new());
+env.add_encrypt_kem_callback(OpenSslCrypto::new());
+env.populate_software();
+```
+
+| Operation | Coverage |
+|---|---|
+| Content encryption and decryption | AES-128/192/256 in CBC and GCM; keys, IVs and nonces from OpenSSL's random number generator |
+| Key transport | RSAES-PKCS1-v1_5, RSAES-OAEP with SHA-1/256/384/512, to and from an `rsaEncryption` key |
+| Key agreement | ephemeral-static ECDH with the X9.63 KDF (SHA-256/384/512) and AES key wrap, on any named curve OpenSSL decodes |
+| KEM | ML-KEM-512/768/1024 with HKDF (SHA-256/384/512) and AES key wrap; OpenSSL 3.5 or later |
+| Signing | RSA PKCS #1 v1.5 and RSASSA-PSS, ECDSA, and pure ML-DSA and SLH-DSA on OpenSSL 3.5 or later |
+
+Key agreement, in both directions, hands the `ECC-CMS-SharedInfo` to OpenSSL's ECDH as the KDF's
+shared info, as OpenSSL's own CMS does, so the derivation returns the key-encryption key and the
+shared secret never leaves OpenSSL. As with verification, an OpenSSL error is the provider
+declining, and the environment passes the request to the next implementation.
+
 ## Testing
 
 `cargo test` runs the unit tests and the signature tests with no setup. The signature tests verify
@@ -124,12 +158,31 @@ export CERTVAL_OPENSSL_SLHDSA_CERTS=$EX/pkits_slh_dsa_sha2_128f/certs:$EX/pkits_
 cargo test --features pqc -- --nocapture
 ```
 
-The assertion in each case is **agreement** with software, not success. Where the linked OpenSSL is
+With the `cms` feature, the CMS tests cover each operation with only this provider registered, so
+every operation reaches OpenSSL:
+
+- Messages it builds are decrypted by OpenSSL's CMS implementation, which reads each message's
+  encoding independently of the provider's wiring: every key transport and content encryption
+  algorithm, ECDH on P-256, P-384 and P-521 with each KDF hash and wrap, and ML-KEM with each
+  parameter set, KDF and wrap, with and without user keying material.
+- Decryption and signing are crossed with certval-cms's RustCrypto software in both directions:
+  what software builds or signs, OpenSSL decrypts or verifies, and the reverse.
+- One test mixes providers in one environment, a different implementation at each plug point, and
+  takes a signed, then enveloped, message through all of them.
+
+OpenSSL's CMS reads KEMRecipientInfo from 3.6, and AuthEnvelopedData's authenticated attributes as
+RFC 5083 tags them from 3.6.4; against an older OpenSSL those decryptions are skipped, and the test
+says so. With certval's `pqc` feature, software signature verification in a debug build needs more
+than a test thread's default 2 MiB of stack, so those tests run on a thread with 8 MiB.
+
+The assertion in the collection tests is **agreement** with software, not success. Where the linked OpenSSL is
 3.5 or later, the ML-DSA and SLH-DSA tests also require that OpenSSL answered; where it is older,
 they require that it answered nothing.
 
-CI runs the suite three times on Ubuntu: against the runner's OpenSSL 3.0 with its default provider;
-against an OpenSSL 3.5 built from source, which is where ML-DSA and SLH-DSA are exercised; and with
+CI runs the suite four times on Ubuntu: against the runner's OpenSSL 3.0 with its default provider;
+against an OpenSSL 3.5 built from source, which is where ML-DSA and SLH-DSA are exercised; against
+an OpenSSL 3.6 built from source, running the CMS tests and failing if any is skipped for want of a
+newer OpenSSL; and with
 OpenSSL's FIPS provider built from a source release OpenSSL lists as validated, configured
 with `default_properties = fips=yes` and `CERTVAL_OPENSSL_EXPECT_FIPS` set. See `.github/workflows/ci.yml`
 for the configuration, which doubles as a worked example.
@@ -144,6 +197,13 @@ disagreements in either interface.
 In CI, against OpenSSL's FIPS provider (built from the 3.0.9 source release and loaded into Ubuntu
 24.04's OpenSSL 3.0.13 with `fips=yes` required), the FIPS provider answered all 389 RSA and 388
 ECDSA verifications and both RSASSA-PSS ones, with no disagreements.
+
+With the `cms` feature, against Homebrew's OpenSSL 3.6.5 on macOS 26.6, every CMS test passes, none
+skipped.
+
+certval-cms is not on crates.io yet, so `Cargo.toml`'s `[patch.crates-io]` takes it from a
+neighboring checkout (`../certval-cms`), and CI checks it out there. Both go when it publishes, and
+this crate cannot publish before it does.
 
 certval is consumed from crates.io. A commented `[patch.crates-io]` line in `Cargo.toml` redirects
 the dependency to a local checkout for developing both crates together.

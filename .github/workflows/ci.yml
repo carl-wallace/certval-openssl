@@ -30,10 +30,15 @@ jobs:
           - 1.89.0 # MSRV
           - stable
     steps:
-      # certval comes from crates.io, so no sibling checkout is needed here.
       - uses: actions/checkout@v7
         with:
           path: certval-openssl
+      # certval-cms is not on crates.io yet, so Cargo.toml's [patch.crates-io] takes it from a
+      # neighboring checkout, which this is. Both go once it publishes.
+      - uses: actions/checkout@v7
+        with:
+          repository: carl-wallace/certval-cms
+          path: certval-cms
       - run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
       - uses: dtolnay/rust-toolchain@master
         with:
@@ -51,6 +56,12 @@ jobs:
       - uses: actions/checkout@v7
         with:
           path: certval-openssl
+      # certval-cms is not on crates.io yet, so Cargo.toml's [patch.crates-io] takes it from a
+      # neighboring checkout, which this is. Both go once it publishes.
+      - uses: actions/checkout@v7
+        with:
+          repository: carl-wallace/certval-cms
+          path: certval-cms
       - run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -80,6 +91,12 @@ jobs:
       - uses: actions/checkout@v7
         with:
           path: certval-openssl
+      # certval-cms is not on crates.io yet, so Cargo.toml's [patch.crates-io] takes it from a
+      # neighboring checkout, which this is. Both go once it publishes.
+      - uses: actions/checkout@v7
+        with:
+          repository: carl-wallace/certval-cms
+          path: certval-cms
       # The certificate collections live in rust-pki's test data and are pointed at rather than
       # copied, which is what the environment variables below are for. Pinned to the commit the
       # certval release in Cargo.toml was published from (certval-v0.2.0-rc.1), so the certificates
@@ -100,7 +117,7 @@ jobs:
           CERTVAL_OPENSSL_MLDSA_CERTS: ${{ github.workspace }}/rust-pki/certval/tests/examples/pkits_ml_dsa_44/certs
         # --nocapture so the per-family tallies land in the log: they are the only way to see how
         # much OpenSSL answered, as opposed to software.
-        run: cargo test --features pqc -- --nocapture
+        run: cargo test --features pqc,cms -- --nocapture
 
   # ML-DSA and SLH-DSA arrived in OpenSSL 3.5, and Ubuntu 24.04's OpenSSL is 3.0, so the jobs above
   # check only that the provider declines them there. This one builds an OpenSSL 3.5 release and
@@ -114,6 +131,12 @@ jobs:
       - uses: actions/checkout@v7
         with:
           path: certval-openssl
+      # certval-cms is not on crates.io yet, so Cargo.toml's [patch.crates-io] takes it from a
+      # neighboring checkout, which this is. Both go once it publishes.
+      - uses: actions/checkout@v7
+        with:
+          repository: carl-wallace/certval-cms
+          path: certval-cms
       - uses: actions/checkout@v7
         with:
           repository: carl-wallace/rust-pki
@@ -154,7 +177,63 @@ jobs:
           # the software verifier the results are compared against costs about half a minute per
           # set in a debug build.
           CERTVAL_OPENSSL_SLHDSA_CERTS: ${{ github.workspace }}/rust-pki/certval/tests/examples/pkits_slh_dsa_sha2_128f/certs:${{ github.workspace }}/rust-pki/certval/tests/examples/pkits_slh_dsa_shake_256f/certs
-        run: cargo test --features pqc -- --nocapture
+        run: cargo test --features pqc,cms -- --nocapture
+
+  # OpenSSL's CMS reads KEMRecipientInfo from 3.6, and AuthEnvelopedData's authenticated attributes as
+  # RFC 5083 tags them from 3.6.4, so the jobs above build the CMS tests' KEM messages without
+  # decrypting them. This one links against an OpenSSL 3.6 release, runs the CMS tests, including the
+  # one that mixes providers in one environment, and fails if any is skipped for want of a newer
+  # OpenSSL. The build is cached by version.
+  test-openssl-3-6:
+    runs-on: ubuntu-24.04
+    env:
+      OPENSSL_VERSION: 3.6.5
+      OPENSSL_SHA256: a2157c2830efdec3788939b00c9b0638306d3f0bbb76dc4832ee503bb397df98
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: certval-openssl
+      # certval-cms is not on crates.io yet, so Cargo.toml's [patch.crates-io] takes it from a
+      # neighboring checkout, which this is. Both go once it publishes.
+      - uses: actions/checkout@v7
+        with:
+          repository: carl-wallace/certval-cms
+          path: certval-cms
+      - run: sudo apt-get update && sudo apt-get install -y pkg-config
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache the OpenSSL build
+        id: openssl-cache
+        uses: actions/cache@v6
+        with:
+          path: ~/openssl
+          key: openssl-${{ env.OPENSSL_VERSION }}-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Build OpenSSL
+        if: steps.openssl-cache.outputs.cache-hit != 'true'
+        working-directory: ${{ runner.temp }}
+        run: |
+          curl -fsSL -o openssl.tar.gz \
+            "https://github.com/openssl/openssl/releases/download/openssl-${OPENSSL_VERSION}/openssl-${OPENSSL_VERSION}.tar.gz"
+          echo "${OPENSSL_SHA256}  openssl.tar.gz" | sha256sum -c -
+          tar xzf openssl.tar.gz
+          cd "openssl-${OPENSSL_VERSION}"
+          ./Configure --prefix="$HOME/openssl" --libdir=lib
+          make -j"$(nproc)"
+          make install_sw
+
+      - name: Run the CMS tests against OpenSSL ${{ env.OPENSSL_VERSION }}
+        env:
+          OPENSSL_DIR: /home/runner/openssl
+          LD_LIBRARY_PATH: /home/runner/openssl/lib
+        run: |
+          set -o pipefail
+          cargo test --features pqc,cms --test cms --test cms_decrypt --test cms_signed --test cms_mixed \
+            -- --nocapture 2>&1 | tee "$RUNNER_TEMP/test.log"
+          if grep -nE 'older than OpenSSL|not decrypted' "$RUNNER_TEMP/test.log"; then
+            echo "a CMS check was skipped for want of a newer OpenSSL; this job exists to run them all"
+            exit 1
+          fi
 
   # The same tests with every algorithm fetched from OpenSSL's FIPS provider. Ubuntu does not ship
   # the FIPS provider outside Ubuntu Pro, so it is built here from a release OpenSSL lists as a
@@ -169,6 +248,12 @@ jobs:
       - uses: actions/checkout@v7
         with:
           path: certval-openssl
+      # certval-cms is not on crates.io yet, so Cargo.toml's [patch.crates-io] takes it from a
+      # neighboring checkout, which this is. Both go once it publishes.
+      - uses: actions/checkout@v7
+        with:
+          repository: carl-wallace/certval-cms
+          path: certval-cms
       - uses: actions/checkout@v7
         with:
           repository: carl-wallace/rust-pki
@@ -228,7 +313,7 @@ jobs:
 
       # Built before OPENSSL_CONF is set, so cargo's own downloads use the system's default
       # configuration and only the tests run against the FIPS one.
-      - run: cargo test --features pqc --no-run
+      - run: cargo test --features pqc,cms --no-run
 
       - name: Run the tests against the FIPS provider
         env:
@@ -240,4 +325,4 @@ jobs:
         run: |
           export OPENSSL_CONF="$HOME/fips/openssl.cnf"
           export OPENSSL_MODULES="$HOME/fips/lib/ossl-modules"
-          cargo test --offline --features pqc -- --nocapture
+          cargo test --offline --features pqc,cms -- --nocapture
