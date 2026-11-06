@@ -8,8 +8,9 @@ Added a `cms` feature, under which `OpenSslCrypto` implements certval-cms's cont
 decryption, key transport, key agreement and KEM interfaces: AES-128/192/256 in CBC and GCM,
 RSAES-PKCS1-v1_5 and RSAES-OAEP, ephemeral-static ECDH with the X9.63 KDF, and ML-KEM (OpenSSL 3.5
 or later) with HKDF, the last two with AES key wrap. `OpenSslRecipientKey` decrypts each recipient
-type, and `OpenSslSigningKey` signs SignedData, each with a private key OpenSSL holds. `pqc` also
-turns on certval-cms's `pqc` under `cms`.
+type, and `OpenSslSigningKey` signs SignedData, each with a private key OpenSSL holds. `OpenSslKey` is
+the signing key without a certificate (certval-cms's `SigningKey`), e.g. to sign a certificate
+request. `pqc` also turns on certval-cms's `pqc` under `cms`.
 
 ## [0.1.0-rc.1] - 2026-10-31
 

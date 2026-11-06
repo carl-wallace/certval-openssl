@@ -14,7 +14,7 @@ use certval_cms::{
     ContentEncryptionAlgorithm, ContentEncryptionOutput, ContentParameters, DecryptContent,
     EncryptContent, EncryptKem, EncryptKeyAgreement, EncryptKeyTransport, Error, GcmParameters,
     KdfAlgorithm, KemOutput, KeyAgreeOutput, KeyAgreementAlgorithm, KeyTransportAlgorithm,
-    KeyWrapAlgorithm, RecipientCredential, Result, SigningCredential,
+    KeyWrapAlgorithm, RecipientCredential, Result, SigningCredential, SigningKey,
 };
 use const_oid::db::{
     fips203::{ID_ALG_ML_KEM_1024, ID_ALG_ML_KEM_512, ID_ALG_ML_KEM_768},
@@ -667,63 +667,39 @@ impl RecipientCredential for OpenSslRecipientKey {
     }
 }
 
-/// A [`SigningCredential`] whose private key is held by OpenSSL, signing SignedData with RSA PKCS #1
-/// v1.5 or RSASSA-PSS, ECDSA, or, on OpenSSL 3.5 or later, pure ML-DSA and SLH-DSA, each wholly in
-/// OpenSSL, hashing included.
-pub struct OpenSslSigningKey {
-    certificate: Certificate,
+/// A [`SigningKey`] whose private key is held by OpenSSL, with no certificate: e.g. a key signing
+/// its own certificate request or a self-signed certificate. It signs as [`OpenSslSigningKey`]
+/// does: RSA PKCS #1 v1.5 or RSASSA-PSS, ECDSA, or, on OpenSSL 3.5 or later, pure ML-DSA and
+/// SLH-DSA, each wholly in OpenSSL, hashing included.
+pub struct OpenSslKey {
+    public_key: SubjectPublicKeyInfoOwned,
     key: PKey<Private>,
 }
 
-impl OpenSslSigningKey {
-    /// A credential for `key`, identified by `certificate`. The key must be the private half of the
-    /// certificate's public key.
-    pub fn new(certificate: Certificate, key: PKey<Private>) -> Result<Self> {
+impl OpenSslKey {
+    /// A key for `key`, whose public key OpenSSL encodes.
+    pub fn new(key: PKey<Private>) -> Result<Self> {
         let public = key
             .public_key_to_der()
             .map_err(|e| declined("encode a public key", e))?;
-        if public
-            != certificate
-                .tbs_certificate()
-                .subject_public_key_info()
-                .to_der()?
-        {
-            return Err(Error::InvalidInput(String::from(
-                "the private key is not the certificate's",
-            )));
-        }
-        Ok(Self { certificate, key })
+        Ok(Self {
+            public_key: der::Decode::from_der(&public)?,
+            key,
+        })
     }
 
-    /// A credential for the PKCS #8 (RFC 5958) private key `der`, identified by `certificate`.
-    pub fn from_pkcs8_der(certificate: Certificate, der: &[u8]) -> Result<Self> {
+    /// A key for the PKCS #8 (RFC 5958) private key `der`.
+    pub fn from_pkcs8_der(der: &[u8]) -> Result<Self> {
         let key =
             PKey::private_key_from_pkcs8(der).map_err(|e| declined("decode a private key", e))?;
-        Self::new(certificate, key)
-    }
-}
-
-impl SigningCredential for OpenSslSigningKey {
-    fn certificate(&self) -> &Certificate {
-        &self.certificate
+        Self::new(key)
     }
 
-    fn sign_message(
-        &self,
-        _env: &CmsEnvironment,
-        alg: &AlgorithmIdentifierOwned,
-        message: &[u8],
-    ) -> Result<Vec<u8>> {
+    fn sign(&self, alg: &AlgorithmIdentifierOwned, message: &[u8]) -> Result<Vec<u8>> {
         let signer = if is_pure_pqc(alg) {
             // RFC 9881 and RFC 9909: the signature's identifier is the key's, and the signature
             // carries no context string, which is OpenSSL's default.
-            let key_alg = self
-                .certificate
-                .tbs_certificate()
-                .subject_public_key_info()
-                .algorithm
-                .oid;
-            if alg.oid != key_alg {
+            if alg.oid != self.public_key.algorithm.oid {
                 return Err(Error::Unrecognized);
             }
             openssl::sign::Signer::new_without_digest(&self.key)
@@ -753,5 +729,64 @@ impl SigningCredential for OpenSslSigningKey {
         })?;
         trace!("OpenSSL signed with {}", alg.oid);
         Ok(signature)
+    }
+}
+
+impl SigningKey for OpenSslKey {
+    fn public_key(&self) -> &SubjectPublicKeyInfoOwned {
+        &self.public_key
+    }
+
+    fn sign_message(
+        &self,
+        _env: &CmsEnvironment,
+        alg: &AlgorithmIdentifierOwned,
+        message: &[u8],
+    ) -> Result<Vec<u8>> {
+        self.sign(alg, message)
+    }
+}
+
+/// A [`SigningCredential`] whose private key is held by OpenSSL, signing SignedData with RSA PKCS #1
+/// v1.5 or RSASSA-PSS, ECDSA, or, on OpenSSL 3.5 or later, pure ML-DSA and SLH-DSA, each wholly in
+/// OpenSSL, hashing included. An [`OpenSslKey`] with its certificate.
+pub struct OpenSslSigningKey {
+    certificate: Certificate,
+    key: OpenSslKey,
+}
+
+impl OpenSslSigningKey {
+    /// A credential for `key`, identified by `certificate`. The key must be the private half of the
+    /// certificate's public key.
+    pub fn new(certificate: Certificate, key: PKey<Private>) -> Result<Self> {
+        let key = OpenSslKey::new(key)?;
+        if key.public_key != *certificate.tbs_certificate().subject_public_key_info() {
+            return Err(Error::InvalidInput(String::from(
+                "the private key is not the certificate's",
+            )));
+        }
+        Ok(Self { certificate, key })
+    }
+
+    /// A credential for the PKCS #8 (RFC 5958) private key `der`, identified by `certificate`.
+    pub fn from_pkcs8_der(certificate: Certificate, der: &[u8]) -> Result<Self> {
+        let key =
+            PKey::private_key_from_pkcs8(der).map_err(|e| declined("decode a private key", e))?;
+        Self::new(certificate, key)
+    }
+}
+
+impl SigningCredential for OpenSslSigningKey {
+    fn certificate(&self) -> &Certificate {
+        &self.certificate
+    }
+
+    fn sign_message(
+        &self,
+        _env: &CmsEnvironment,
+        alg: &AlgorithmIdentifierOwned,
+        message: &[u8],
+    ) -> Result<Vec<u8>> {
+        self.key.sign(alg, message)
     }
 }
