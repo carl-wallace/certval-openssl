@@ -69,5 +69,5 @@ mod ffi;
 mod provider;
 
 #[cfg(feature = "cms")]
-pub use cms::{OpenSslRecipientKey, OpenSslSigningKey};
+pub use cms::{OpenSslKey, OpenSslRecipientKey, OpenSslSigningKey};
 pub use provider::OpenSslCrypto;
