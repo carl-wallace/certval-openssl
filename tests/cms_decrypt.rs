@@ -12,8 +12,9 @@
 
 use certval_cms::{
     AuthEnvelopedDataBuilder, CmsEnvironment, ContentEncryptionAlgorithm, EnvelopedDataBuilder,
-    Error, KdfAlgorithm, KemRecipient, KeyAgreeRecipient, KeyAgreementAlgorithm, KeyTransRecipient,
-    KeyTransportAlgorithm, KeyWrapAlgorithm, RecipientCredential, SoftwareRecipientKey,
+    Error, GcmParameters, KdfAlgorithm, KemRecipient, KeyAgreeRecipient, KeyAgreementAlgorithm,
+    KeyTransRecipient, KeyTransportAlgorithm, KeyWrapAlgorithm, RecipientCredential,
+    SoftwareRecipientKey,
 };
 use certval_openssl::{OpenSslCrypto, OpenSslRecipientKey};
 use cms::{builder::RecipientInfoBuilder, cert::x509::attr::Attribute, content_info::ContentInfo};
@@ -422,4 +423,40 @@ fn a_changed_tag_fails_decryption() {
         Err(Error::Crypto(e)) => assert_eq!(e, "content decryption failed"),
         other => panic!("{:?}", other.map(|_| ())),
     }
+}
+
+/// OpenSSL accepts a GCM tag of 1 to 16 octets; RFC 5084, section 3.2, allows a message 12 to 16.
+/// A message whose GCMParameters gives 8, with the mac truncated to match, is refused before
+/// OpenSSL sees it.
+#[test]
+fn a_tag_shorter_than_rfc_5084_allows_is_refused() {
+    let env = openssl_only();
+    let recipient = Recipient::new(PKey::from_rsa(Rsa::generate(2048).unwrap()).unwrap());
+    let r = KeyTransRecipient::from_certificate(
+        &env,
+        &recipient.cert,
+        None,
+        KeyTransportAlgorithm::RsaOaepSha256,
+    )
+    .unwrap();
+    let ci = envelop(&env, ContentEncryptionAlgorithm::Aes256Gcm, r);
+    let mut aed = cms::authenveloped_data::AuthEnvelopedData::from_der(
+        &der::Encode::to_der(&ci.content).unwrap(),
+    )
+    .unwrap();
+    let alg = &mut aed.auth_encrypted_content_info.content_enc_alg;
+    let mut params =
+        GcmParameters::from_der(&der::Encode::to_der(alg.parameters.as_ref().unwrap()).unwrap())
+            .unwrap();
+    params.icv_len = 8;
+    alg.parameters = Some(Any::encode_from(&params).unwrap());
+    aed.mac = der::asn1::OctetString::new(&aed.mac.as_bytes()[..8]).unwrap();
+    let shortened = ContentInfo {
+        content_type: ci.content_type,
+        content: Any::encode_from(&aed).unwrap(),
+    };
+    assert!(matches!(
+        env.decrypt_enveloped_data(&shortened, Some(&recipient.openssl())),
+        Err(Error::InvalidInput(_))
+    ));
 }
