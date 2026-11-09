@@ -70,6 +70,26 @@ jobs:
       - run: cargo clippy --all-targets
       - run: cargo clippy --all-targets --all-features
 
+  # docs.rs builds with nightly and --cfg docsrs, which turns on doc_cfg's feature badges; the same
+  # build here catches broken intra-doc links before publication.
+  docs:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: certval-openssl
+      # certval-cms is not on crates.io yet, so Cargo.toml's [patch.crates-io] takes it from a
+      # neighboring checkout, which this is. Both go once it publishes.
+      - uses: actions/checkout@v7
+        with:
+          repository: carl-wallace/certval-cms
+          path: certval-cms
+      - run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
+      - uses: dtolnay/rust-toolchain@nightly
+      - run: cargo doc --no-deps --all-features
+        env:
+          RUSTDOCFLAGS: --cfg docsrs -D warnings
+
   # A job of its own so it can be a required check without making clippy one: each Rust release
   # adds lints, and a required clippy would fail unrelated pull requests.
   rustfmt:
