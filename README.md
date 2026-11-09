@@ -96,8 +96,10 @@ Through the wrapper, a bad signature would look like a refusal and fall through 
 
 With the `cms` feature, `OpenSslCrypto` also implements
 [certval-cms](https://github.com/carl-wallace/certval-cms)'s content encryption and decryption and
-its three kinds of recipient encryption, and two credentials hold an OpenSSL private key:
-`OpenSslRecipientKey` decrypts and `OpenSslSigningKey` signs. Register the implementations on a
+its three kinds of recipient encryption, and three types hold an OpenSSL private key:
+`OpenSslRecipientKey` decrypts, `OpenSslSigningKey` signs, and `OpenSslKey`, a key with no
+certificate, signs certificate requests and self-signed certificates through certval-cms's
+`CredentialSigner`. Register the implementations on a
 `CmsEnvironment` ahead of, or instead of, certval-cms's software:
 
 ```rust

@@ -58,6 +58,7 @@
 //! with AES key wrap. They are registered on a `CmsEnvironment` the same way, and an OpenSSL error
 //! is likewise a decline.
 
+#![cfg_attr(docsrs, feature(doc_cfg))]
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
 

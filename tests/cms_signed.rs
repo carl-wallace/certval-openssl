@@ -15,7 +15,7 @@ use certval_cms::{
     rsa_pss, CmsEnvironment, DigestAlgorithm, SignedDataBuilder, Signer, SignerPolicy,
     SigningCredential, SoftwareSigningKey,
 };
-use certval_openssl::{OpenSslCrypto, OpenSslSigningKey};
+use certval_openssl::{OpenSslCrypto, OpenSslKey, OpenSslSigningKey};
 use der::Decode;
 use openssl::asn1::Asn1Time;
 use openssl::bn::BigNum;
@@ -238,4 +238,52 @@ fn ml_dsa() {
         let (openssl, software) = credentials(generate(name));
         cross_both_ways(&openssl, &software, |s| s, &format!("{name:?}"));
     }
+}
+
+// ---- keys without certificates
+
+/// An `OpenSslKey` signs a certificate request through certval-cms's `CredentialSigner`, with
+/// OpenSSL alone registered, and software verifies it with the key's public key, which is the one
+/// the request carries.
+fn signs_its_request(key: PKey<Private>, digest: DigestAlgorithm, name: &str) {
+    use certval_cms::{CredentialSignature, CredentialSigner, SigningKey};
+    use der::Encode;
+    use std::str::FromStr;
+    use x509_cert::{builder::Builder, name::Name, request::RequestBuilder};
+    let key = OpenSslKey::from_pkcs8_der(&key.private_key_to_pkcs8().unwrap()).unwrap();
+    let platform = openssl_only();
+    let signer =
+        CredentialSigner::new(&platform, &key, digest).unwrap_or_else(|e| panic!("{name}: {e}"));
+    let request = RequestBuilder::new(Name::from_str("CN=certval-openssl request").unwrap())
+        .unwrap()
+        .build::<_, CredentialSignature>(&signer)
+        .unwrap_or_else(|e| panic!("{name}: signing the request: {e}"));
+    assert_eq!(&request.info.public_key, key.public_key(), "{name}");
+    let software = software();
+    let pe = software.pki_environment().unwrap();
+    pe.verify_signature_message(
+        pe,
+        &request.info.to_der().unwrap(),
+        &request.signature,
+        &request.algorithm,
+        &request.info.public_key,
+    )
+    .unwrap_or_else(|e| panic!("{name}: verifying the request: {e:?}"));
+}
+
+#[test]
+fn a_key_without_a_certificate_signs_a_request() {
+    signs_its_request(
+        PKey::from_rsa(Rsa::generate(2048).unwrap()).unwrap(),
+        DigestAlgorithm::Sha256,
+        "RSA",
+    );
+    signs_its_request(
+        PKey::from_ec_key(
+            EcKey::generate(&EcGroup::from_curve_name(Nid::X9_62_PRIME256V1).unwrap()).unwrap(),
+        )
+        .unwrap(),
+        DigestAlgorithm::Sha256,
+        "P-256",
+    );
 }
