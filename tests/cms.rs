@@ -14,12 +14,11 @@
 use certval_cms::{
     AuthEnvelopedDataBuilder, CmsEnvironment, ContentEncryptionAlgorithm, EnvelopedDataBuilder,
     Error, KdfAlgorithm, KemRecipient, KeyAgreeRecipient, KeyAgreementAlgorithm, KeyTransRecipient,
-    KeyTransportAlgorithm, KeyWrapAlgorithm,
+    KeyTransportAlgorithm, KeyWrapAlgorithm, RecipientInfoBuilder,
 };
 use certval_openssl::OpenSslCrypto;
 use cms::{
-    builder::RecipientInfoBuilder, cert::x509::attr::Attribute, content_info::ContentInfo,
-    enveloped_data::RecipientIdentifier,
+    cert::x509::attr::Attribute, content_info::ContentInfo, enveloped_data::RecipientIdentifier,
 };
 use const_oid::db::rfc5911::{ID_CONTENT_TYPE, ID_DATA};
 use der::{

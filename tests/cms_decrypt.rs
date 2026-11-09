@@ -14,10 +14,10 @@ use certval_cms::{
     AuthEnvelopedDataBuilder, CmsEnvironment, ContentEncryptionAlgorithm, EnvelopedDataBuilder,
     Error, GcmParameters, KdfAlgorithm, KemRecipient, KeyAgreeRecipient, KeyAgreementAlgorithm,
     KeyTransRecipient, KeyTransportAlgorithm, KeyWrapAlgorithm, RecipientCredential,
-    SoftwareRecipientKey,
+    RecipientInfoBuilder, SoftwareRecipientKey,
 };
 use certval_openssl::{OpenSslCrypto, OpenSslRecipientKey};
-use cms::{builder::RecipientInfoBuilder, cert::x509::attr::Attribute, content_info::ContentInfo};
+use cms::{cert::x509::attr::Attribute, content_info::ContentInfo};
 use const_oid::db::rfc5911::{ID_CONTENT_TYPE, ID_DATA};
 use der::{asn1::SetOfVec, Any, Decode};
 use getrandom::SysRng;
@@ -394,6 +394,28 @@ fn a_private_key_that_is_not_the_certificates_is_refused() {
         OpenSslRecipientKey::new(a.cert.clone(), b),
         Err(Error::InvalidInput(_))
     ));
+}
+
+/// The plaintext vector is sized once: a regrowth during decryption would copy the plaintext and
+/// free the first buffer without zeroizing it.
+#[test]
+fn gcm_plaintext_is_not_regrown_during_decryption() {
+    let env = openssl_only();
+    let content = vec![7u8; 1 << 20];
+    let out = env
+        .encrypt_content(ContentEncryptionAlgorithm::Aes256Gcm, &content, None)
+        .unwrap();
+    let plaintext = env
+        .decrypt_content(
+            &out.algorithm,
+            &out.key,
+            &out.ciphertext,
+            None,
+            out.tag.as_deref(),
+        )
+        .unwrap();
+    assert_eq!(plaintext.as_slice(), content.as_slice());
+    assert!(plaintext.capacity() <= plaintext.len() + 16);
 }
 
 #[test]

@@ -138,7 +138,8 @@ fn gcm_encrypt(
         if let Some(aad) = aad {
             ctx.cipher_update(aad, None)?;
         }
-        let mut ciphertext = vec![];
+        // Room for the final call's block, so the vector is not regrown and copied.
+        let mut ciphertext = Vec::with_capacity(plaintext.len() + GCM_TAG_LEN);
         ctx.cipher_update_vec(plaintext, &mut ciphertext)?;
         ctx.cipher_final_vec(&mut ciphertext)?;
         let mut tag = vec![0u8; GCM_TAG_LEN];
@@ -443,7 +444,9 @@ fn gcm_decrypt(
         ctx.set_tag(tag)
     })()
     .map_err(|e| declined("decrypt content", e))?;
-    let mut plaintext = Zeroizing::new(vec![]);
+    // Room for the final call's block, so the vector is not regrown, which would leave a copy of
+    // the plaintext in freed memory.
+    let mut plaintext = Zeroizing::new(Vec::with_capacity(ciphertext.len() + GCM_TAG_LEN));
     (|| -> core::result::Result<(), ErrorStack> {
         if let Some(aad) = aad {
             ctx.cipher_update(aad, None)?;
