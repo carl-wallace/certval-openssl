@@ -4,7 +4,8 @@ version = "0.1.0-rc.1"
 description = """
 OpenSSL crypto provider for certval. Performs message digest calculation and certificate signature
 verification with the system's OpenSSL 3, so certification path validation can use OpenSSL's FIPS
-provider where one is installed rather than an in-process software implementation.
+provider where one is installed rather than an in-process software implementation. With `cms`,
+certval-cms's content encryption, key transport, key agreement, KEM and signing go through OpenSSL too.
 """
 license = "Apache-2.0 OR MIT"
 repository = "https://github.com/carl-wallace/certval-openssl"
@@ -57,7 +58,7 @@ sha2 = "0.11.0"
 signature = "3.0.0"
 # The cms tests: recipient identifiers and attributes, and the random number generator certval-cms's
 # builders take.
-cms = "0.3.0-rc.0"
+cms = "=0.3.0-rc.1"
 getrandom = { version = "0.4.1", features = ["sys_rng"] }
 rand_core = "0.10.1"
 
