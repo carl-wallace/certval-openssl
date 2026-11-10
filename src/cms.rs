@@ -258,12 +258,19 @@ impl EncryptKeyTransport for OpenSslCrypto {
     }
 }
 
-/// The digest, by OpenSSL name, that a key agreement scheme's X9.63 KDF uses.
+/// The digest, by OpenSSL name, that a key agreement scheme's X9.63 KDF uses. A cofactor scheme
+/// derives as its standard counterpart does, since the supported curves have cofactor 1.
 fn x963_digest(alg: KeyAgreementAlgorithm) -> Result<&'static CStr> {
     match alg {
-        KeyAgreementAlgorithm::EcdhSha256 => Ok(c"SHA256"),
-        KeyAgreementAlgorithm::EcdhSha384 => Ok(c"SHA384"),
-        KeyAgreementAlgorithm::EcdhSha512 => Ok(c"SHA512"),
+        KeyAgreementAlgorithm::EcdhSha256 | KeyAgreementAlgorithm::EcdhCofactorSha256 => {
+            Ok(c"SHA256")
+        }
+        KeyAgreementAlgorithm::EcdhSha384 | KeyAgreementAlgorithm::EcdhCofactorSha384 => {
+            Ok(c"SHA384")
+        }
+        KeyAgreementAlgorithm::EcdhSha512 | KeyAgreementAlgorithm::EcdhCofactorSha512 => {
+            Ok(c"SHA512")
+        }
         _ => Err(Error::Unrecognized),
     }
 }
