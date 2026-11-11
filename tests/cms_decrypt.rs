@@ -399,6 +399,34 @@ fn a_private_key_that_is_not_the_certificates_is_refused() {
     ));
 }
 
+/// An originator key that is the point at infinity fails key agreement as one that does not decode
+/// does, rather than being declined as an operation OpenSSL does not perform.
+#[test]
+fn an_originator_key_at_infinity_fails_key_agreement() {
+    use der::asn1::BitString;
+    let envs = Crossing::new();
+    let key = PKey::from_ec_key(
+        EcKey::generate(&EcGroup::from_curve_name(Nid::X9_62_PRIME256V1).unwrap()).unwrap(),
+    )
+    .unwrap();
+    let recipient = Recipient::new(key);
+    let credential = recipient.openssl();
+    let spki = recipient.cert.tbs_certificate().subject_public_key_info();
+    for (name, point) in [("infinity", vec![0u8]), ("off the curve", vec![4u8; 65])] {
+        let mut originator = spki.clone();
+        originator.subject_public_key = BitString::from_bytes(&point).unwrap();
+        let result = credential.decrypt_key_agreement(
+            &envs.openssl,
+            KeyAgreementAlgorithm::EcdhSha256,
+            KeyWrapAlgorithm::Aes256,
+            &originator,
+            None,
+            &[0u8; 40],
+        );
+        assert!(matches!(result, Err(Error::Crypto(_))), "{name}");
+    }
+}
+
 /// The plaintext vector is sized once: a regrowth during decryption would copy the plaintext and
 /// free the first buffer without zeroizing it.
 #[test]
