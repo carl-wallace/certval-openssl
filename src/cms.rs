@@ -556,18 +556,30 @@ impl OpenSslRecipientKey {
             .ec_key()
             .map_err(|e| declined("use an EC key", e))?;
         let group = ec.group();
-        (|| -> core::result::Result<_, ErrorStack> {
+        let failed = || Error::Crypto(String::from("key agreement failed"));
+        let key = (|| -> core::result::Result<_, ErrorStack> {
             let mut bn_ctx = BigNumContext::new()?;
             let point = EcPoint::from_bytes(
                 group,
                 originator.subject_public_key.raw_bytes(),
                 &mut bn_ctx,
             )?;
-            PKey::from_ec_key(EcKey::from_public_key(group, &point)?)
+            // The point at infinity decodes but is no public key; it fails here, as the points
+            // that do not decode do, rather than at derivation.
+            if point.is_infinity(group) {
+                return Ok(None);
+            }
+            Ok(Some(PKey::from_ec_key(EcKey::from_public_key(
+                group, &point,
+            )?)?))
         })()
         .map_err(|e| {
             debug!("OpenSSL could not decode an originator key: {e}");
-            Error::Crypto(String::from("key agreement failed"))
+            failed()
+        })?;
+        key.ok_or_else(|| {
+            debug!("an originator key is the point at infinity");
+            failed()
         })
     }
 }

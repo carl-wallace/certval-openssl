@@ -181,13 +181,14 @@ The assertion in the collection tests is **agreement** with software, not succes
 3.5 or later, the ML-DSA and SLH-DSA tests also require that OpenSSL answered; where it is older,
 they require that it answered nothing.
 
-CI runs the suite four times on Ubuntu: against the runner's OpenSSL 3.0 with its default provider;
-against an OpenSSL 3.5 built from source, which is where ML-DSA and SLH-DSA are exercised; against
-an OpenSSL 3.6 built from source, running the CMS tests and failing if any is skipped for want of a
-newer OpenSSL; and with
-OpenSSL's FIPS provider built from a source release OpenSSL lists as validated, configured
-with `default_properties = fips=yes` and `CERTVAL_OPENSSL_EXPECT_FIPS` set. See `.github/workflows/ci.yml`
-for the configuration, which doubles as a worked example.
+CI runs the suite five times on Ubuntu: against the runner's OpenSSL 3.0 with its default provider,
+and again with no features; against an OpenSSL 3.5 built from source, which is where ML-DSA and
+SLH-DSA are exercised; against an OpenSSL 3.6 built from source, running the CMS tests and failing if
+any is skipped for want of a newer OpenSSL; with OpenSSL's FIPS provider built from a source release
+OpenSSL lists as validated (3.0.9); and with an OpenSSL 3.5 built with its FIPS provider, the first
+whose FIPS provider has ML-KEM, ML-DSA and SLH-DSA. Both FIPS runs configure
+`default_properties = fips=yes` and set `CERTVAL_OPENSSL_EXPECT_FIPS`. See
+`.github/workflows/ci.yml` for the configuration, which doubles as a worked example.
 
 ## Status
 
@@ -199,6 +200,12 @@ disagreements in either interface.
 In CI, against OpenSSL's FIPS provider (built from the 3.0.9 source release and loaded into Ubuntu
 24.04's OpenSSL 3.0.13 with `fips=yes` required), the FIPS provider answered all 389 RSA and 388
 ECDSA verifications and both RSASSA-PSS ones, with no disagreements.
+
+Run on macOS against OpenSSL 3.5.5 built with its FIPS provider (`fips=yes` required), the FIPS
+provider answered all 389 RSA, 388 ECDSA and 390 ML-DSA-65 verifications and both RSASSA-PSS ones,
+with no disagreements. It declines RSAES-PKCS1-v1_5 key transport encryption, a service FIPS does not
+approve, so the provider reports it unperformed and another implementation, if registered, performs
+it; it still decrypts PKCS #1 v1.5 key transport. The 3.0.9 FIPS provider performs both.
 
 With the `cms` feature, against Homebrew's OpenSSL 3.6.5 on macOS 26.6, every CMS test passes, none
 skipped.
