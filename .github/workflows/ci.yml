@@ -355,3 +355,101 @@ jobs:
           export OPENSSL_CONF="$HOME/fips/openssl.cnf"
           export OPENSSL_MODULES="$HOME/fips/lib/ossl-modules"
           cargo test --offline --features pqc,cms -- --nocapture
+
+  # The same tests with every algorithm fetched from an OpenSSL 3.5 FIPS provider, the first with
+  # ML-KEM, ML-DSA and SLH-DSA in it, which the 3.0.9 provider above lacks. OpenSSL 3.5 is built with
+  # its FIPS provider and linked against, as test-openssl-3-5 links against its plain build. Whether
+  # a given 3.5 FIPS provider is validated is a question for the CMVP list; this checks the
+  # provider's behavior, not its validation. The build is cached by version.
+  test-fips-3-5:
+    runs-on: ubuntu-24.04
+    env:
+      OPENSSL_VERSION: 3.5.5
+      OPENSSL_SHA256: b28c91532a8b65a1f983b4c28b7488174e4a01008e29ce8e69bd789f28bc2a89
+      OPENSSL_DIR: /home/runner/openssl-fips
+      LD_LIBRARY_PATH: /home/runner/openssl-fips/lib
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: certval-openssl
+      # certval-cms is not on crates.io yet, so Cargo.toml's [patch.crates-io] takes it from a
+      # neighboring checkout, which this is. Both go once it publishes.
+      - uses: actions/checkout@v7
+        with:
+          repository: carl-wallace/certval-cms
+          path: certval-cms
+      - uses: actions/checkout@v7
+        with:
+          repository: carl-wallace/rust-pki
+          ref: 8eb10cbc236bf18d7147a3e8d7924f89ba37dd57
+          path: rust-pki
+      - run: sudo apt-get update && sudo apt-get install -y pkg-config
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache the OpenSSL FIPS build
+        id: openssl-fips-cache
+        uses: actions/cache@v6
+        with:
+          path: ~/openssl-fips
+          key: openssl-fips-full-${{ env.OPENSSL_VERSION }}-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Build OpenSSL with its FIPS provider
+        if: steps.openssl-fips-cache.outputs.cache-hit != 'true'
+        working-directory: ${{ runner.temp }}
+        run: |
+          curl -fsSL -o openssl.tar.gz \
+            "https://github.com/openssl/openssl/releases/download/openssl-${OPENSSL_VERSION}/openssl-${OPENSSL_VERSION}.tar.gz"
+          echo "${OPENSSL_SHA256}  openssl.tar.gz" | sha256sum -c -
+          tar xzf openssl.tar.gz
+          cd "openssl-${OPENSSL_VERSION}"
+          ./Configure enable-fips --prefix="$HOME/openssl-fips" --libdir=lib
+          make -j"$(nproc)"
+          # install_fips installs fips.so and runs fipsinstall, which self-tests the module and
+          # writes fipsmodule.cnf.
+          make install_sw install_fips
+
+      - name: Configure OpenSSL to require the FIPS provider
+        run: |
+          cat > "$HOME/openssl-fips/openssl-fips.cnf" <<CNF
+          config_diagnostics = 1
+          openssl_conf = openssl_init
+
+          .include $HOME/openssl-fips/ssl/fipsmodule.cnf
+
+          [openssl_init]
+          providers = provider_sect
+          alg_section = algorithm_sect
+
+          [provider_sect]
+          fips = fips_sect
+          base = base_sect
+
+          [base_sect]
+          activate = 1
+
+          [algorithm_sect]
+          default_properties = fips=yes
+          CNF
+          # Show the providers the configuration activates, so a run that never reached the FIPS
+          # provider is visible in the log as well as failing the FIPS test.
+          OPENSSL_CONF="$HOME/openssl-fips/openssl-fips.cnf" \
+            OPENSSL_MODULES="$HOME/openssl-fips/lib/ossl-modules" \
+            "$HOME/openssl-fips/bin/openssl" list -providers
+
+      # Built before OPENSSL_CONF is set, so cargo's own downloads use the system's default
+      # configuration and only the tests run against the FIPS one.
+      - run: cargo test --features pqc,cms --no-run
+
+      - name: Run the tests against the OpenSSL 3.5 FIPS provider
+        env:
+          CERTVAL_OPENSSL_EXPECT_FIPS: "1"
+          CERTVAL_OPENSSL_RSA_CERTS: ${{ github.workspace }}/rust-pki/certval/tests/examples/PKITS_data_2048/certs
+          CERTVAL_OPENSSL_ECDSA_CERTS: ${{ github.workspace }}/rust-pki/certval/tests/examples/PKITS_data_p256/certs
+          CERTVAL_OPENSSL_PSS_CERTS: ${{ github.workspace }}/rust-pki/certval/tests/examples/rsapss
+          CERTVAL_OPENSSL_MLDSA_CERTS: ${{ github.workspace }}/rust-pki/certval/tests/examples/pkits_ml_dsa_65/certs
+          # One SLH-DSA parameter set per hash family, as test-openssl-3-5 runs.
+          CERTVAL_OPENSSL_SLHDSA_CERTS: ${{ github.workspace }}/rust-pki/certval/tests/examples/pkits_slh_dsa_sha2_128f/certs:${{ github.workspace }}/rust-pki/certval/tests/examples/pkits_slh_dsa_shake_256f/certs
+        run: |
+          export OPENSSL_CONF="$HOME/openssl-fips/openssl-fips.cnf"
+          export OPENSSL_MODULES="$HOME/openssl-fips/lib/ossl-modules"
+          cargo test --offline --features pqc,cms -- --nocapture
