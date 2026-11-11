@@ -151,6 +151,18 @@ fn contents() -> Vec<(ContentEncryptionAlgorithm, bool)> {
     contents
 }
 
+/// Whether `built` is a FIPS provider declining RSAES-PKCS1-v1_5 encryption, a service FIPS does
+/// not approve. OpenSSL 3.5's FIPS provider refuses it, while the 3.0 one performs it, so a
+/// decline is accepted under FIPS rather than required; decryption is still expected.
+fn fips_declines_pkcs1v15_encryption<T>(
+    alg: KeyTransportAlgorithm,
+    built: &Result<T, Error>,
+) -> bool {
+    alg == KeyTransportAlgorithm::RsaPkcs1v15
+        && OpenSslCrypto::fips_mode_enabled()
+        && matches!(built, Err(Error::Unrecognized))
+}
+
 #[test]
 fn key_transport_with_each_algorithm_and_content_encryption() {
     let env = openssl_only();
@@ -163,13 +175,15 @@ fn key_transport_with_each_algorithm_and_content_encryption() {
         KeyTransportAlgorithm::RsaOaepSha512,
     ] {
         for (content, auth_attrs) in contents() {
+            let name = format!("{alg:?} {content:?} attrs={auth_attrs}");
             let recipient = KeyTransRecipient::new(&env, rid(), spki(&key), alg);
-            let ci = envelop(&env, content, auth_attrs, recipient).unwrap();
-            assert_decrypts(
-                &key,
-                &ci,
-                &format!("{alg:?} {content:?} attrs={auth_attrs}"),
-            );
+            let built = envelop(&env, content, auth_attrs, recipient);
+            if fips_declines_pkcs1v15_encryption(alg, &built) {
+                eprintln!("{name}: declined by the FIPS provider, which does not encrypt with it");
+                continue;
+            }
+            let ci = built.unwrap_or_else(|e| panic!("{name}: building the message: {e:?}"));
+            assert_decrypts(&key, &ci, &name);
         }
     }
 }

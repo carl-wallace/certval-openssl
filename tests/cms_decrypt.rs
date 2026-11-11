@@ -156,20 +156,38 @@ fn envelop<'e>(
     alg: ContentEncryptionAlgorithm,
     recipient: impl RecipientInfoBuilder<Rng = Rng> + 'e,
 ) -> ContentInfo {
+    try_envelop(env, alg, recipient).unwrap()
+}
+
+/// [`envelop`], returning the builder's error rather than panicking on it.
+fn try_envelop<'e>(
+    env: &'e CmsEnvironment,
+    alg: ContentEncryptionAlgorithm,
+    recipient: impl RecipientInfoBuilder<Rng = Rng> + 'e,
+) -> Result<ContentInfo, Error> {
     if alg.is_authenticated() {
-        let mut builder = AuthEnvelopedDataBuilder::new(MESSAGE, alg).unwrap();
+        let mut builder = AuthEnvelopedDataBuilder::new(MESSAGE, alg)?;
         builder.auth_attrs(content_type_attrs());
         builder
             .add_recipient(recipient)
             .build_content_info(env, &mut rng())
-            .unwrap()
     } else {
-        EnvelopedDataBuilder::new(MESSAGE, alg)
-            .unwrap()
+        EnvelopedDataBuilder::new(MESSAGE, alg)?
             .add_recipient(recipient)
             .build_content_info(env, &mut rng())
-            .unwrap()
     }
+}
+
+/// Whether `built` is a FIPS provider declining RSAES-PKCS1-v1_5 encryption, a service FIPS does
+/// not approve. OpenSSL 3.5's FIPS provider refuses it, while the 3.0 one performs it, so a
+/// decline is accepted under FIPS rather than required; decryption is still expected.
+fn fips_declines_pkcs1v15_encryption<T>(
+    alg: KeyTransportAlgorithm,
+    built: &Result<T, Error>,
+) -> bool {
+    alg == KeyTransportAlgorithm::RsaPkcs1v15
+        && OpenSslCrypto::fips_mode_enabled()
+        && matches!(built, Err(Error::Unrecognized))
 }
 
 /// Decrypts with `env` and `credential`, and checks the content.
@@ -226,7 +244,12 @@ fn key_transport_with_each_algorithm_and_content_encryption() {
 
             let r = KeyTransRecipient::from_certificate(&envs.openssl, &recipient.cert, None, alg)
                 .unwrap();
-            let ci = envelop(&envs.openssl, content, r);
+            let built = try_envelop(&envs.openssl, content, r);
+            if fips_declines_pkcs1v15_encryption(alg, &built) {
+                eprintln!("{name}: declined by the FIPS provider, which does not encrypt with it");
+                continue;
+            }
+            let ci = built.unwrap();
             assert_decrypts(
                 &envs.software,
                 &ci,

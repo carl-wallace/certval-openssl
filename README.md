@@ -201,6 +201,12 @@ In CI, against OpenSSL's FIPS provider (built from the 3.0.9 source release and 
 24.04's OpenSSL 3.0.13 with `fips=yes` required), the FIPS provider answered all 389 RSA and 388
 ECDSA verifications and both RSASSA-PSS ones, with no disagreements.
 
+Run on macOS against OpenSSL 3.5.5 built with its FIPS provider (`fips=yes` required), the FIPS
+provider answered all 389 RSA, 388 ECDSA and 390 ML-DSA-65 verifications and both RSASSA-PSS ones,
+with no disagreements. It declines RSAES-PKCS1-v1_5 key transport encryption, a service FIPS does not
+approve, so the provider reports it unperformed and another implementation, if registered, performs
+it; it still decrypts PKCS #1 v1.5 key transport. The 3.0.9 FIPS provider performs both.
+
 With the `cms` feature, against Homebrew's OpenSSL 3.6.5 on macOS 26.6, every CMS test passes, none
 skipped.
 
