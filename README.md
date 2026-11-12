@@ -210,10 +210,6 @@ it; it still decrypts PKCS #1 v1.5 key transport. The 3.0.9 FIPS provider perfor
 With the `cms` feature, against Homebrew's OpenSSL 3.6.5 on macOS 26.6, every CMS test passes, none
 skipped.
 
-certval-cms is not on crates.io yet, so `Cargo.toml`'s `[patch.crates-io]` takes it from a
-neighboring checkout (`../certval-cms`), and CI checks it out there. Both go when it publishes, and
-this crate cannot publish before it does.
-
 certval is consumed from crates.io. A commented `[patch.crates-io]` line in `Cargo.toml` redirects
 the dependency to a local checkout for developing both crates together.
 

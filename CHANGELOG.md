@@ -2,7 +2,7 @@
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html), except that
 an increase to the minimum supported Rust version is not treated as a breaking change.
 
-## [0.1.0-rc.1]
+## [0.1.0-rc.1] - 2026-11-12
 
 Initial release. Calculates SHA-1/224/256/384/512 digests and verifies RSA PKCS #1 v1.5,
 RSASSA-PSS and ECDSA certificate signatures through the system's OpenSSL 3, and pure ML-DSA and
