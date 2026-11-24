@@ -157,14 +157,19 @@ fn contents() -> Vec<(ContentEncryptionAlgorithm, bool)> {
 
 /// Whether `built` is a FIPS provider declining RSAES-PKCS1-v1_5 encryption, a service FIPS does
 /// not approve. OpenSSL 3.5's FIPS provider refuses it, while the 3.0 one performs it, so a
-/// decline is accepted under FIPS rather than required; decryption is still expected.
+/// decline is accepted under FIPS rather than required; decryption is still expected. A decline
+/// passes through cms's builder, whose error carries only a message, so it may arrive as its text.
 fn fips_declines_pkcs1v15_encryption<T>(
     alg: KeyTransportAlgorithm,
     built: &Result<T, Error>,
 ) -> bool {
     alg == KeyTransportAlgorithm::RsaPkcs1v15
         && OpenSslCrypto::fips_mode_enabled()
-        && matches!(built, Err(Error::Unrecognized))
+        && match built {
+            Err(Error::Unrecognized) => true,
+            Err(Error::InvalidInput(m)) => *m == Error::Unrecognized.to_string(),
+            _ => false,
+        }
 }
 
 #[test]
