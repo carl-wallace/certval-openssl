@@ -7,6 +7,10 @@ an increase to the minimum supported Rust version is not treated as a breaking c
 ### Added
 - With `cms`, `OpenSslCrypto` implements certval-cms's `EncryptContent::encrypt_content_with_key`,
   so EncryptedData under a given key is encrypted through OpenSSL.
+- With `cms`, `OpenSslKeyEncryptor`, `OpenSslKeyAgreement` and `OpenSslKeyWrap` implement cms's
+  key encryption, key agreement and key wrap traits, so cms's own `KeyTransRecipientInfoBuilder`
+  and `KeyAgreeRecipientInfoBuilder` perform RSA key transport, ECDH with the X9.63 KDF, and AES
+  key wrap through OpenSSL.
 
 ## [0.1.0-rc.1] - 2026-11-12
 

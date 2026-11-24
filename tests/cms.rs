@@ -3,7 +3,9 @@
 //! message's encoding independently of how the provider was wired: RSA key transport with each
 //! algorithm, ECDH on P-256, P-384 and P-521 with each KDF hash and wrap, and ML-KEM with each
 //! parameter set, KDF and wrap, with and without user keying material, plus every content
-//! encryption algorithm; and EncryptedData under a given key, decrypted by RustCrypto.
+//! encryption algorithm; and EncryptedData under a given key, decrypted by RustCrypto. Key
+//! transport and key agreement also go through cms's own recipient builders, with
+//! `OpenSslKeyEncryptor`, `OpenSslKeyAgreement` and `OpenSslKeyWrap`.
 //!
 //! ML-KEM needs OpenSSL 3.5, and OpenSSL's CMS reads KEMRecipientInfo from 3.6 and
 //! AuthEnvelopedData's authenticated attributes as RFC 5083 tags them from 3.6.4; against an older
@@ -17,8 +19,11 @@ use certval_cms::{
     KeyAgreeRecipient, KeyAgreementAlgorithm, KeyTransRecipient, KeyTransportAlgorithm,
     KeyWrapAlgorithm,
 };
-use certval_openssl::OpenSslCrypto;
-use cms::builder::{EnvelopedDataBuilder, RecipientInfoBuilder};
+use certval_openssl::{OpenSslCrypto, OpenSslKeyAgreement, OpenSslKeyEncryptor, OpenSslKeyWrap};
+use cms::builder::{
+    EnvelopedDataBuilder, KeyAgreeRecipientInfoBuilder, KeyTransRecipientInfoBuilder,
+    RecipientInfoBuilder,
+};
 use cms::{
     cert::x509::attr::Attribute, content_info::ContentInfo, enveloped_data::RecipientIdentifier,
 };
@@ -227,6 +232,111 @@ fn key_agreement(curve: Nid) {
                 assert_decrypts(&key, &ci, &name);
             }
         }
+    }
+}
+
+/// The key agreement recipient identifier for [`rid`].
+fn key_agree_rid() -> cms::enveloped_data::KeyAgreeRecipientIdentifier {
+    cms::enveloped_data::KeyAgreeRecipientIdentifier::RKeyId(
+        cms::enveloped_data::RecipientKeyIdentifier {
+            subject_key_identifier: SubjectKeyIdentifier(
+                OctetString::new(vec![1, 2, 3, 4]).unwrap(),
+            ),
+            date: None,
+            other: None,
+        },
+    )
+}
+
+/// Key agreement through cms's own `KeyAgreeRecipientInfoBuilder`, with an `OpenSslKeyAgreement`
+/// and an `OpenSslKeyWrap`, for each scheme, wrap and user keying material.
+fn key_agreement_through_cms_builder(curve: Nid) {
+    let env = openssl_only();
+    let group = EcGroup::from_curve_name(curve).unwrap();
+    let key = PKey::from_ec_key(EcKey::generate(&group).unwrap()).unwrap();
+    for alg in [
+        KeyAgreementAlgorithm::EcdhSha256,
+        KeyAgreementAlgorithm::EcdhSha384,
+        KeyAgreementAlgorithm::EcdhSha512,
+        KeyAgreementAlgorithm::EcdhCofactorSha256,
+        KeyAgreementAlgorithm::EcdhCofactorSha384,
+        KeyAgreementAlgorithm::EcdhCofactorSha512,
+    ] {
+        for wrap in WRAPS {
+            for ukm in [None, Some(b"user keying material".to_vec())] {
+                let name = format!(
+                    "cms builder {} {alg:?} {wrap:?} ukm={}",
+                    curve.short_name().unwrap(),
+                    ukm.is_some()
+                );
+                let recipient = KeyAgreeRecipientInfoBuilder::new(
+                    ukm.map(|ukm| OctetString::new(ukm).unwrap()),
+                    key_agree_rid(),
+                    OpenSslKeyAgreement::new(spki(&key), alg),
+                    OpenSslKeyWrap::new(wrap),
+                )
+                .unwrap();
+                let ci = envelop(
+                    &env,
+                    ContentEncryptionAlgorithm::Aes256Cbc,
+                    false,
+                    recipient,
+                )
+                .unwrap_or_else(|e| panic!("{name}: building the message: {e:?}"));
+                assert_decrypts(&key, &ci, &name);
+            }
+        }
+    }
+}
+
+#[test]
+fn key_agreement_through_cms_builder_on_p256() {
+    key_agreement_through_cms_builder(Nid::X9_62_PRIME256V1);
+}
+
+#[test]
+fn key_agreement_through_cms_builder_on_p384() {
+    key_agreement_through_cms_builder(Nid::SECP384R1);
+}
+
+#[test]
+fn key_agreement_through_cms_builder_on_p521() {
+    key_agreement_through_cms_builder(Nid::SECP521R1);
+}
+
+/// Key transport through cms's own `KeyTransRecipientInfoBuilder` with an `OpenSslKeyEncryptor`,
+/// for each algorithm. cms's builder reports any encryption failure as the same message, so under
+/// a FIPS provider an RSAES-PKCS1-v1_5 failure is accepted as its decline.
+#[test]
+fn key_transport_through_cms_builder() {
+    let env = openssl_only();
+    let key = PKey::from_rsa(Rsa::generate(2048).unwrap()).unwrap();
+    for alg in [
+        KeyTransportAlgorithm::RsaPkcs1v15,
+        KeyTransportAlgorithm::RsaOaepSha1,
+        KeyTransportAlgorithm::RsaOaepSha256,
+        KeyTransportAlgorithm::RsaOaepSha384,
+        KeyTransportAlgorithm::RsaOaepSha512,
+    ] {
+        let name = format!("cms builder {alg:?}");
+        let recipient =
+            KeyTransRecipientInfoBuilder::new(rid(), OpenSslKeyEncryptor::new(spki(&key), alg))
+                .unwrap();
+        let built = envelop(
+            &env,
+            ContentEncryptionAlgorithm::Aes256Cbc,
+            false,
+            recipient,
+        );
+        if alg == KeyTransportAlgorithm::RsaPkcs1v15
+            && OpenSslCrypto::fips_mode_enabled()
+            && built.is_err()
+        {
+            eprintln!("{name}: declined by the FIPS provider, which does not encrypt with it");
+            continue;
+        }
+        let ci = built.unwrap_or_else(|e| panic!("{name}: building the message: {e:?}"));
+        assert_decrypts(&key, &ci, &name);
     }
 }
 

@@ -75,7 +75,7 @@ fn public_key(spki: &SubjectPublicKeyInfoOwned, id: Id) -> Result<PKey<Public>> 
 }
 
 /// Wraps `cek` under `kek` with AES key wrap (RFC 3394).
-fn aes_key_wrap(wrap: KeyWrapAlgorithm, kek: &[u8], cek: &[u8]) -> Result<Vec<u8>> {
+pub(crate) fn aes_key_wrap(wrap: KeyWrapAlgorithm, kek: &[u8], cek: &[u8]) -> Result<Vec<u8>> {
     let cipher = match wrap {
         KeyWrapAlgorithm::Aes128 => Cipher::aes_128_wrap(),
         KeyWrapAlgorithm::Aes192 => Cipher::aes_192_wrap(),
@@ -265,24 +265,33 @@ impl EncryptKeyTransport for OpenSslCrypto {
         spki: &SubjectPublicKeyInfoOwned,
         cek: &[u8],
     ) -> Result<Vec<u8>> {
-        // RFC 4055 restricts a key identified as id-RSASSA-PSS to signatures.
-        if spki.algorithm.oid != RSA_ENCRYPTION {
-            return Err(Error::Unrecognized);
-        }
-        let oaep_md = oaep_md(alg)?;
-        let key = public_key(spki, Id::RSA)?;
-        let encrypted = (|| -> core::result::Result<_, ErrorStack> {
-            let mut ctx = PkeyCtx::new(&key)?;
-            ctx.encrypt_init()?;
-            set_key_transport_padding(&mut ctx, oaep_md)?;
-            let mut encrypted = vec![];
-            ctx.encrypt_to_vec(cek, &mut encrypted)?;
-            Ok(encrypted)
-        })()
-        .map_err(|e| declined("perform key transport", e))?;
-        trace!("OpenSSL performed key transport with {alg:?}");
-        Ok(encrypted)
+        rsa_encrypt(alg, spki, cek)
     }
+}
+
+/// Encrypts `cek` to the RSA key in `spki` with `alg`.
+pub(crate) fn rsa_encrypt(
+    alg: KeyTransportAlgorithm,
+    spki: &SubjectPublicKeyInfoOwned,
+    cek: &[u8],
+) -> Result<Vec<u8>> {
+    // RFC 4055 restricts a key identified as id-RSASSA-PSS to signatures.
+    if spki.algorithm.oid != RSA_ENCRYPTION {
+        return Err(Error::Unrecognized);
+    }
+    let oaep_md = oaep_md(alg)?;
+    let key = public_key(spki, Id::RSA)?;
+    let encrypted = (|| -> core::result::Result<_, ErrorStack> {
+        let mut ctx = PkeyCtx::new(&key)?;
+        ctx.encrypt_init()?;
+        set_key_transport_padding(&mut ctx, oaep_md)?;
+        let mut encrypted = vec![];
+        ctx.encrypt_to_vec(cek, &mut encrypted)?;
+        Ok(encrypted)
+    })()
+    .map_err(|e| declined("perform key transport", e))?;
+    trace!("OpenSSL performed key transport with {alg:?}");
+    Ok(encrypted)
 }
 
 /// The digest, by OpenSSL name, that a key agreement scheme's X9.63 KDF uses. A cofactor scheme
@@ -323,41 +332,8 @@ impl EncryptKeyAgreement for OpenSslCrypto {
         ukm: Option<&[u8]>,
         cek: &[u8],
     ) -> Result<KeyAgreeOutput> {
-        if spki.algorithm.oid != ID_EC_PUBLIC_KEY {
-            return Err(Error::Unrecognized);
-        }
-        let digest = x963_digest(alg)?;
-        let recipient = public_key(spki, Id::EC)?;
         let shared_info = ecc_cms_shared_info(wrap, ukm)?;
-        let (ephemeral_public_key, kek) = (|| -> core::result::Result<_, ErrorStack> {
-            let recipient_ec = recipient.ec_key()?;
-            let group = recipient_ec.group();
-            let ephemeral = EcKey::generate(group)?;
-            let mut bn_ctx = BigNumContext::new()?;
-            let ephemeral_public_key = ephemeral.public_key().to_bytes(
-                group,
-                PointConversionForm::UNCOMPRESSED,
-                &mut bn_ctx,
-            )?;
-            let ephemeral = PKey::from_ec_key(ephemeral)?;
-
-            let mut ctx = PkeyCtx::new(&ephemeral)?;
-            ctx.derive_init()?;
-            ctx.derive_set_peer(&recipient)?;
-            crate::ffi::set_ecdh_x963_kdf(&mut ctx, digest, wrap.kek_len(), &shared_info)?;
-            let mut kek = Zeroizing::new(vec![0u8; wrap.kek_len()]);
-            let len = ctx.derive(Some(&mut kek))?;
-            kek.truncate(len);
-            Ok((ephemeral_public_key, kek))
-        })()
-        .map_err(|e| declined("perform key agreement", e))?;
-        if kek.len() != wrap.kek_len() {
-            return Err(Error::Crypto(format!(
-                "OpenSSL derived {} octets for a {}-octet key-encryption key",
-                kek.len(),
-                wrap.kek_len()
-            )));
-        }
+        let (ephemeral_public_key, kek) = ecdh_x963(alg, spki, &shared_info, wrap.kek_len())?;
         let encrypted_key = aes_key_wrap(wrap, &kek, cek)?;
         trace!("OpenSSL performed key agreement with {alg:?} and {wrap:?}");
         Ok(KeyAgreeOutput {
@@ -365,6 +341,52 @@ impl EncryptKeyAgreement for OpenSslCrypto {
             encrypted_key,
         })
     }
+}
+
+/// Ephemeral-static ECDH with the EC key in `spki`, on its curve, and the X9.63 KDF of `alg` over
+/// `shared_info`: the ephemeral public key, an uncompressed SEC1 point, and a key-encryption key of
+/// `kek_len` octets.
+pub(crate) fn ecdh_x963(
+    alg: KeyAgreementAlgorithm,
+    spki: &SubjectPublicKeyInfoOwned,
+    shared_info: &[u8],
+    kek_len: usize,
+) -> Result<(Vec<u8>, Zeroizing<Vec<u8>>)> {
+    if spki.algorithm.oid != ID_EC_PUBLIC_KEY {
+        return Err(Error::Unrecognized);
+    }
+    let digest = x963_digest(alg)?;
+    let recipient = public_key(spki, Id::EC)?;
+    let (ephemeral_public_key, kek) = (|| -> core::result::Result<_, ErrorStack> {
+        let recipient_ec = recipient.ec_key()?;
+        let group = recipient_ec.group();
+        let ephemeral = EcKey::generate(group)?;
+        let mut bn_ctx = BigNumContext::new()?;
+        let ephemeral_public_key = ephemeral.public_key().to_bytes(
+            group,
+            PointConversionForm::UNCOMPRESSED,
+            &mut bn_ctx,
+        )?;
+        let ephemeral = PKey::from_ec_key(ephemeral)?;
+
+        let mut ctx = PkeyCtx::new(&ephemeral)?;
+        ctx.derive_init()?;
+        ctx.derive_set_peer(&recipient)?;
+        crate::ffi::set_ecdh_x963_kdf(&mut ctx, digest, kek_len, shared_info)?;
+        let mut kek = Zeroizing::new(vec![0u8; kek_len]);
+        let len = ctx.derive(Some(&mut kek))?;
+        kek.truncate(len);
+        Ok((ephemeral_public_key, kek))
+    })()
+    .map_err(|e| declined("perform key agreement", e))?;
+    if kek.len() != kek_len {
+        return Err(Error::Crypto(format!(
+            "OpenSSL derived {} octets for a {kek_len}-octet key-encryption key",
+            kek.len(),
+        )));
+    }
+    trace!("OpenSSL performed key agreement with {alg:?}");
+    Ok((ephemeral_public_key, kek))
 }
 
 impl EncryptKem for OpenSslCrypto {

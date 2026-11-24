@@ -128,6 +128,12 @@ shared info, as OpenSSL's own CMS does, so the derivation returns the key-encryp
 shared secret never leaves OpenSSL. As with verification, an OpenSSL error is the provider
 declining, and the environment passes the request to the next implementation.
 
+The same key transport, key agreement and key wrap serve cms's own recipient builders, without a
+`CmsEnvironment`: `OpenSslKeyEncryptor` is the key encryption `KeyTransRecipientInfoBuilder` takes,
+and `OpenSslKeyAgreement` and `OpenSslKeyWrap` are the key agreement and key wrap
+`KeyAgreeRecipientInfoBuilder` takes. There, the key-encryption key returns to cms to wrap through
+`OpenSslKeyWrap`, as cms's key agreement interface defines it.
+
 ## Testing
 
 `cargo test` runs the unit tests and the signature tests with no setup. The signature tests verify
@@ -166,7 +172,8 @@ every operation reaches OpenSSL:
 - Messages it builds are decrypted by OpenSSL's CMS implementation, which reads each message's
   encoding independently of the provider's wiring: every key transport and content encryption
   algorithm, ECDH on P-256, P-384 and P-521 with each KDF hash and wrap, and ML-KEM with each
-  parameter set, KDF and wrap, with and without user keying material.
+  parameter set, KDF and wrap, with and without user keying material. Key transport and key
+  agreement are also built through cms's own recipient builders with this crate's types.
 - Decryption and signing are crossed with certval-cms's RustCrypto software in both directions:
   what software builds or signs, OpenSSL decrypts or verifies, and the reverse.
 - One test mixes providers in one environment, a different implementation at each plug point, and

@@ -57,6 +57,10 @@
 //! transport, ECDH with the X9.63 KDF, and ML-KEM (OpenSSL 3.5 or later) with HKDF, the last two
 //! with AES key wrap. They are registered on a `CmsEnvironment` the same way, and an OpenSSL error
 //! is likewise a decline.
+//!
+//! For cms's own recipient builders, used without a `CmsEnvironment`, [`OpenSslKeyEncryptor`]
+//! implements the key encryption `KeyTransRecipientInfoBuilder` takes, and [`OpenSslKeyAgreement`]
+//! and [`OpenSslKeyWrap`] the key agreement and key wrap `KeyAgreeRecipientInfoBuilder` takes.
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![deny(unsafe_code)]
@@ -65,10 +69,14 @@
 mod algorithm;
 #[cfg(feature = "cms")]
 mod cms;
+#[cfg(feature = "cms")]
+mod cms_builders;
 #[allow(unsafe_code)]
 mod ffi;
 mod provider;
 
 #[cfg(feature = "cms")]
 pub use cms::{OpenSslKey, OpenSslRecipientKey, OpenSslSigningKey};
+#[cfg(feature = "cms")]
+pub use cms_builders::{OpenSslKeyAgreement, OpenSslKeyEncryptor, OpenSslKeyWrap};
 pub use provider::OpenSslCrypto;

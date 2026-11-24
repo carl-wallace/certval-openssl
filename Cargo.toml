@@ -24,7 +24,7 @@ default = []
 pqc = ["certval/pqc", "certval-cms?/pqc"]
 # Implements certval-cms's content encryption, key transport, key agreement and KEM interfaces, so
 # that EnvelopedData and AuthEnvelopedData can be built with OpenSSL.
-cms = ["dep:certval-cms", "dep:x509-cert", "dep:zeroize"]
+cms = ["dep:certval-cms", "dep:cms", "dep:rsa", "dep:x509-cert", "dep:zeroize"]
 
 [dependencies]
 certval = { version = "0.2.0-rc.3", default-features = false }
@@ -41,6 +41,11 @@ openssl = "0.10.81"
 openssl-sys = "0.9.117"
 # Under the `cms` feature.
 certval-cms = { version = "0.1.0-rc.1", optional = true }
+# cms's builder traits, which OpenSslKeyEncryptor, OpenSslKeyAgreement and OpenSslKeyWrap implement
+# so that cms's own recipient builders perform their key management through OpenSSL; rsa for the
+# RandomizedEncryptor trait cms's key transport builder takes.
+cms = { version = "=0.3.0-rc.2", features = ["builder"], optional = true }
+rsa = { version = "0.10.0", default-features = false, optional = true }
 x509-cert = { version = "0.3.0", default-features = false, optional = true }
 zeroize = { version = "1.8.1", optional = true }
 # The pointer accessor for the one verification call made directly; the version openssl uses.
