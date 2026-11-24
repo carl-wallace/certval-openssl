@@ -11,12 +11,13 @@
 #![cfg(feature = "cms")]
 
 use certval_cms::{
-    AuthEnvelopedDataBuilder, CmsEnvironment, ContentEncryptionAlgorithm, EnvelopedDataBuilder,
-    Error, GcmParameters, KdfAlgorithm, KemRecipient, KeyAgreeRecipient, KeyAgreementAlgorithm,
+    content_info, AuthEnvelopedDataBuilder, CmsEnvironment, ContentEncryptionAlgorithm, Error,
+    GcmParameters, KdfAlgorithm, KemRecipient, KeyAgreeRecipient, KeyAgreementAlgorithm,
     KeyTransRecipient, KeyTransportAlgorithm, KeyWrapAlgorithm, RecipientCredential,
-    RecipientInfoBuilder, SoftwareRecipientKey,
+    SoftwareRecipientKey,
 };
 use certval_openssl::{OpenSslCrypto, OpenSslRecipientKey};
+use cms::builder::{EnvelopedDataBuilder, RecipientInfoBuilder};
 use cms::{cert::x509::attr::Attribute, content_info::ContentInfo};
 use const_oid::db::rfc5911::{ID_CONTENT_TYPE, ID_DATA};
 use der::{asn1::SetOfVec, Any, Decode};
@@ -166,28 +167,35 @@ fn try_envelop<'e>(
     recipient: impl RecipientInfoBuilder<Rng = Rng> + 'e,
 ) -> Result<ContentInfo, Error> {
     if alg.is_authenticated() {
-        let mut builder = AuthEnvelopedDataBuilder::new(MESSAGE, alg)?;
+        let mut builder = AuthEnvelopedDataBuilder::new(MESSAGE, env.content_encryptor(alg));
         builder.auth_attrs(content_type_attrs());
         builder
             .add_recipient(recipient)
-            .build_content_info(env, &mut rng())
+            .build_content_info(&mut rng())
     } else {
-        EnvelopedDataBuilder::new(MESSAGE, alg)?
-            .add_recipient(recipient)
-            .build_content_info(env, &mut rng())
+        let enveloped_data =
+            EnvelopedDataBuilder::new(None, MESSAGE, env.content_encryptor(alg), None)?
+                .add_recipient_info(recipient)?
+                .build_with_rng(&mut rng())?;
+        content_info(const_oid::db::rfc5911::ID_ENVELOPED_DATA, &enveloped_data)
     }
 }
 
 /// Whether `built` is a FIPS provider declining RSAES-PKCS1-v1_5 encryption, a service FIPS does
 /// not approve. OpenSSL 3.5's FIPS provider refuses it, while the 3.0 one performs it, so a
-/// decline is accepted under FIPS rather than required; decryption is still expected.
+/// decline is accepted under FIPS rather than required; decryption is still expected. A decline
+/// passes through cms's builder, whose error carries only a message, so it may arrive as its text.
 fn fips_declines_pkcs1v15_encryption<T>(
     alg: KeyTransportAlgorithm,
     built: &Result<T, Error>,
 ) -> bool {
     alg == KeyTransportAlgorithm::RsaPkcs1v15
         && OpenSslCrypto::fips_mode_enabled()
-        && matches!(built, Err(Error::Unrecognized))
+        && match built {
+            Err(Error::Unrecognized) => true,
+            Err(Error::InvalidInput(m)) => *m == Error::Unrecognized.to_string(),
+            _ => false,
+        }
 }
 
 /// Decrypts with `env` and `credential`, and checks the content.
@@ -484,10 +492,11 @@ fn a_changed_tag_fails_decryption() {
     )
     .unwrap();
     let ci = envelop(&env, ContentEncryptionAlgorithm::Aes256Gcm, r);
-    let mut aed = cms::authenveloped_data::AuthEnvelopedData::from_der(
-        &der::Encode::to_der(&ci.content).unwrap(),
-    )
-    .unwrap();
+    let mut aed: cms::authenveloped_data::AuthEnvelopedData =
+        cms::authenveloped_data::AuthEnvelopedData::from_der(
+            &der::Encode::to_der(&ci.content).unwrap(),
+        )
+        .unwrap();
     let mut mac = aed.mac.as_bytes().to_vec();
     mac[0] ^= 1;
     aed.mac = der::asn1::OctetString::new(mac).unwrap();
@@ -516,10 +525,11 @@ fn a_tag_shorter_than_rfc_5084_allows_is_refused() {
     )
     .unwrap();
     let ci = envelop(&env, ContentEncryptionAlgorithm::Aes256Gcm, r);
-    let mut aed = cms::authenveloped_data::AuthEnvelopedData::from_der(
-        &der::Encode::to_der(&ci.content).unwrap(),
-    )
-    .unwrap();
+    let mut aed: cms::authenveloped_data::AuthEnvelopedData =
+        cms::authenveloped_data::AuthEnvelopedData::from_der(
+            &der::Encode::to_der(&ci.content).unwrap(),
+        )
+        .unwrap();
     let alg = &mut aed.auth_encrypted_content_info.content_enc_alg;
     let mut params =
         GcmParameters::from_der(&der::Encode::to_der(alg.parameters.as_ref().unwrap()).unwrap())

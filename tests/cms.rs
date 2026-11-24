@@ -3,7 +3,7 @@
 //! message's encoding independently of how the provider was wired: RSA key transport with each
 //! algorithm, ECDH on P-256, P-384 and P-521 with each KDF hash and wrap, and ML-KEM with each
 //! parameter set, KDF and wrap, with and without user keying material, plus every content
-//! encryption algorithm.
+//! encryption algorithm; and EncryptedData under a given key, decrypted by RustCrypto.
 //!
 //! ML-KEM needs OpenSSL 3.5, and OpenSSL's CMS reads KEMRecipientInfo from 3.6 and
 //! AuthEnvelopedData's authenticated attributes as RFC 5083 tags them from 3.6.4; against an older
@@ -12,11 +12,13 @@
 #![cfg(feature = "cms")]
 
 use certval_cms::{
-    AuthEnvelopedDataBuilder, CmsEnvironment, ContentEncryptionAlgorithm, EnvelopedDataBuilder,
-    Error, KdfAlgorithm, KemRecipient, KeyAgreeRecipient, KeyAgreementAlgorithm, KeyTransRecipient,
-    KeyTransportAlgorithm, KeyWrapAlgorithm, RecipientInfoBuilder,
+    content_info, decrypt_content_rust_crypto, AuthEnvelopedDataBuilder, CmsEnvironment,
+    ContentEncryptionAlgorithm, EncryptedDataBuilder, Error, KdfAlgorithm, KemRecipient,
+    KeyAgreeRecipient, KeyAgreementAlgorithm, KeyTransRecipient, KeyTransportAlgorithm,
+    KeyWrapAlgorithm,
 };
 use certval_openssl::OpenSslCrypto;
+use cms::builder::{EnvelopedDataBuilder, RecipientInfoBuilder};
 use cms::{
     cert::x509::attr::Attribute, content_info::ContentInfo, enveloped_data::RecipientIdentifier,
 };
@@ -108,17 +110,19 @@ fn envelop<'e>(
     recipient: impl RecipientInfoBuilder<Rng = Rng> + 'e,
 ) -> Result<ContentInfo, Error> {
     if alg.is_authenticated() {
-        let mut builder = AuthEnvelopedDataBuilder::new(MESSAGE, alg)?;
+        let mut builder = AuthEnvelopedDataBuilder::new(MESSAGE, env.content_encryptor(alg));
         if auth_attrs {
             builder.auth_attrs(content_type_attrs());
         }
         builder
             .add_recipient(recipient)
-            .build_content_info(env, &mut rng())
+            .build_content_info(&mut rng())
     } else {
-        EnvelopedDataBuilder::new(MESSAGE, alg)?
-            .add_recipient(recipient)
-            .build_content_info(env, &mut rng())
+        let enveloped_data =
+            EnvelopedDataBuilder::new(None, MESSAGE, env.content_encryptor(alg), None)?
+                .add_recipient_info(recipient)?
+                .build_with_rng(&mut rng())?;
+        content_info(const_oid::db::rfc5911::ID_ENVELOPED_DATA, &enveloped_data)
     }
 }
 
@@ -344,4 +348,43 @@ fn associated_data_for_cbc_is_refused() {
         env.encrypt_content(ContentEncryptionAlgorithm::Aes128Cbc, MESSAGE, Some(b"aad")),
         Err(Error::InvalidInput(_))
     ));
+}
+
+/// EncryptedData encrypted by OpenSSL under a given key, through cms's `ContentEncryptor` with a
+/// key, and decrypted by RustCrypto.
+#[test]
+fn encrypted_data_under_a_given_key() {
+    let env = openssl_only();
+    for alg in [
+        ContentEncryptionAlgorithm::Aes128Cbc,
+        ContentEncryptionAlgorithm::Aes192Cbc,
+        ContentEncryptionAlgorithm::Aes256Cbc,
+    ] {
+        let key: Vec<u8> = (1..=alg.key_len() as u8).collect();
+        let ci = EncryptedDataBuilder::new(MESSAGE, &key, env.content_encryptor(alg))
+            .build_content_info(&mut rng())
+            .unwrap();
+        let ed =
+            cms::encrypted_data::EncryptedData::from_der(&ci.content.to_der().unwrap()).unwrap();
+        let eci = ed.enc_content_info;
+        let content = decrypt_content_rust_crypto(
+            &CmsEnvironment::new(),
+            &eci.content_enc_alg,
+            &key,
+            eci.encrypted_content.unwrap().as_bytes(),
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(content.as_slice(), MESSAGE, "{alg:?}");
+    }
+
+    let alg = ContentEncryptionAlgorithm::Aes128Cbc;
+    let wrong_length =
+        EncryptedDataBuilder::<Rng>::new(MESSAGE, &[0; 32], env.content_encryptor(alg))
+            .build(&mut rng());
+    assert!(
+        matches!(wrong_length, Err(Error::InvalidInput(_))),
+        "{wrong_length:?}"
+    );
 }

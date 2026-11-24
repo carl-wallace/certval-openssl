@@ -20,12 +20,13 @@ use std::sync::Arc;
 
 use certval::PkiEnvironment;
 use certval_cms::{
-    decrypt_content_rust_crypto, encrypt_key_transport_rust_crypto, CmsEnvironment,
-    ContentEncryptionAlgorithm, EnvelopedDataBuilder, KeyAgreeRecipient, KeyAgreementAlgorithm,
-    KeyTransRecipient, KeyTransportAlgorithm, KeyWrapAlgorithm, Layer, SignedDataBuilder, Signer,
-    SignerPolicy, SingleRecipientCredential, SoftwareSigningKey,
+    content_info, decrypt_content_rust_crypto, encrypt_key_transport_rust_crypto, CmsEnvironment,
+    ContentEncryptionAlgorithm, KeyAgreeRecipient, KeyAgreementAlgorithm, KeyTransRecipient,
+    KeyTransportAlgorithm, KeyWrapAlgorithm, Layer, SignedDataBuilder, Signer, SignerPolicy,
+    SingleRecipientCredential, SoftwareSigningKey,
 };
 use certval_openssl::{OpenSslCrypto, OpenSslRecipientKey};
+use cms::builder::EnvelopedDataBuilder;
 use const_oid::db::rfc5911::{ID_DATA, ID_SIGNED_DATA};
 use der::{Decode, Encode};
 use getrandom::SysRng;
@@ -123,11 +124,11 @@ fn one_message_through_providers_mixed_per_plug_point() {
     // recipient by OpenSSL's key agreement.
     let mut rng = UnwrapErr(SysRng);
     let signed_der = signed.content.to_der().unwrap();
-    let mut builder =
-        EnvelopedDataBuilder::new(&signed_der, ContentEncryptionAlgorithm::Aes256Cbc).unwrap();
-    builder.content_type(ID_SIGNED_DATA);
-    let enveloped = builder
-        .add_recipient(
+    let encryptor = env.content_encryptor(ContentEncryptionAlgorithm::Aes256Cbc);
+    let mut builder = EnvelopedDataBuilder::new(None, &signed_der, encryptor, None).unwrap();
+    builder.content_type(ID_SIGNED_DATA).unwrap();
+    let enveloped_data = builder
+        .add_recipient_info(
             KeyTransRecipient::from_certificate(
                 &env,
                 &rsa_cert,
@@ -136,7 +137,8 @@ fn one_message_through_providers_mixed_per_plug_point() {
             )
             .unwrap(),
         )
-        .add_recipient(
+        .unwrap()
+        .add_recipient_info(
             KeyAgreeRecipient::from_certificate(
                 &env,
                 &ec_cert,
@@ -147,8 +149,11 @@ fn one_message_through_providers_mixed_per_plug_point() {
             )
             .unwrap(),
         )
-        .build_content_info(&env, &mut rng)
+        .unwrap()
+        .build_with_rng(&mut rng)
         .unwrap();
+    let enveloped =
+        content_info(const_oid::db::rfc5911::ID_ENVELOPED_DATA, &enveloped_data).unwrap();
 
     // Unwrapped by the EC recipient, its key found through the source; the content decrypted by
     // RustCrypto; the signature verified by OpenSSL.

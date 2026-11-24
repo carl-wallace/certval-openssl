@@ -2,6 +2,12 @@
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html), except that
 an increase to the minimum supported Rust version is not treated as a breaking change.
 
+## [Unreleased]
+
+### Added
+- With `cms`, `OpenSslCrypto` implements certval-cms's `EncryptContent::encrypt_content_with_key`,
+  so EncryptedData under a given key is encrypted through OpenSSL.
+
 ## [0.1.0-rc.1] - 2026-11-12
 
 Initial release. Calculates SHA-1/224/256/384/512 digests and verifies RSA PKCS #1 v1.5,

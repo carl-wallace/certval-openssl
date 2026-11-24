@@ -162,6 +162,43 @@ fn gcm_encrypt(
     })
 }
 
+/// Encrypts `plaintext` under `key` with `alg`, generating the IV or nonce.
+fn encrypt(
+    alg: ContentEncryptionAlgorithm,
+    key: Zeroizing<Vec<u8>>,
+    plaintext: &[u8],
+    aad: Option<&[u8]>,
+) -> Result<ContentEncryptionOutput> {
+    if aad.is_some() && !alg.is_authenticated() {
+        return Err(Error::InvalidInput(String::from(
+            "associated data given for an algorithm that does not authenticate",
+        )));
+    }
+    let encrypted = match alg {
+        ContentEncryptionAlgorithm::Aes128Cbc => {
+            cbc_encrypt(alg, Cipher::aes_128_cbc(), key, plaintext)
+        }
+        ContentEncryptionAlgorithm::Aes192Cbc => {
+            cbc_encrypt(alg, Cipher::aes_192_cbc(), key, plaintext)
+        }
+        ContentEncryptionAlgorithm::Aes256Cbc => {
+            cbc_encrypt(alg, Cipher::aes_256_cbc(), key, plaintext)
+        }
+        ContentEncryptionAlgorithm::Aes128Gcm => {
+            gcm_encrypt(alg, Cipher::aes_128_gcm(), key, plaintext, aad)
+        }
+        ContentEncryptionAlgorithm::Aes192Gcm => {
+            gcm_encrypt(alg, Cipher::aes_192_gcm(), key, plaintext, aad)
+        }
+        ContentEncryptionAlgorithm::Aes256Gcm => {
+            gcm_encrypt(alg, Cipher::aes_256_gcm(), key, plaintext, aad)
+        }
+        _ => Err(Error::Unrecognized),
+    }?;
+    trace!("OpenSSL encrypted content with {alg:?}");
+    Ok(encrypted)
+}
+
 impl EncryptContent for OpenSslCrypto {
     fn encrypt_content(
         &self,
@@ -170,35 +207,25 @@ impl EncryptContent for OpenSslCrypto {
         plaintext: &[u8],
         aad: Option<&[u8]>,
     ) -> Result<ContentEncryptionOutput> {
-        if aad.is_some() && !alg.is_authenticated() {
-            return Err(Error::InvalidInput(String::from(
-                "associated data given for an algorithm that does not authenticate",
+        encrypt(alg, random(alg.key_len())?, plaintext, aad)
+    }
+
+    fn encrypt_content_with_key(
+        &self,
+        _env: &CmsEnvironment,
+        alg: ContentEncryptionAlgorithm,
+        key: &[u8],
+        plaintext: &[u8],
+        aad: Option<&[u8]>,
+    ) -> Result<ContentEncryptionOutput> {
+        if key.len() != alg.key_len() {
+            return Err(Error::InvalidInput(format!(
+                "a key of {} octets for {alg:?}, which takes {}",
+                key.len(),
+                alg.key_len()
             )));
         }
-        let key = random(alg.key_len())?;
-        let encrypted = match alg {
-            ContentEncryptionAlgorithm::Aes128Cbc => {
-                cbc_encrypt(alg, Cipher::aes_128_cbc(), key, plaintext)
-            }
-            ContentEncryptionAlgorithm::Aes192Cbc => {
-                cbc_encrypt(alg, Cipher::aes_192_cbc(), key, plaintext)
-            }
-            ContentEncryptionAlgorithm::Aes256Cbc => {
-                cbc_encrypt(alg, Cipher::aes_256_cbc(), key, plaintext)
-            }
-            ContentEncryptionAlgorithm::Aes128Gcm => {
-                gcm_encrypt(alg, Cipher::aes_128_gcm(), key, plaintext, aad)
-            }
-            ContentEncryptionAlgorithm::Aes192Gcm => {
-                gcm_encrypt(alg, Cipher::aes_192_gcm(), key, plaintext, aad)
-            }
-            ContentEncryptionAlgorithm::Aes256Gcm => {
-                gcm_encrypt(alg, Cipher::aes_256_gcm(), key, plaintext, aad)
-            }
-            _ => Err(Error::Unrecognized),
-        }?;
-        trace!("OpenSSL encrypted content with {alg:?}");
-        Ok(encrypted)
+        encrypt(alg, Zeroizing::new(key.to_vec()), plaintext, aad)
     }
 }
 
